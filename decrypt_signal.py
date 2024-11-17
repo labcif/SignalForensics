@@ -1,5 +1,6 @@
 import argparse
 import pathlib
+import os
 
 VERSION = "1.0"
 
@@ -72,7 +73,9 @@ def parse_args():
         "Input/Output",
         "Arguments related to input/output paths. Output directory and either Signal's directory or configuration and local state files are required.",
     )
-    io_group.add_argument("-d", "--dir", help="Path to Signal's directory", type=pathlib.Path, metavar="<dir>")
+    io_group.add_argument(
+        "-d", "--dir", help="Path to Signal's Roaming directory", type=pathlib.Path, metavar="<dir>", required=True
+    )  # TODO: Change Roaming to other stuff
     io_group.add_argument(
         "-o",
         "--output",
@@ -111,11 +114,68 @@ def parse_args():
 
     # Verbosity arguments
     verbosity_group = parser.add_mutually_exclusive_group()
-    verbosity_group.add_argument("-v", "--verbose", help="Enable verbose output", action="count", default=0)
+    verbosity_group.add_argument("-v", "--verbose", help="Enable verbose output", action="store_true")
     verbosity_group.add_argument("-q", "--quiet", help="Enable quiet output", action="store_true")
 
     # Parse arguments
     return parser.parse_args()
 
 
-args = parse_args()
+# Validate arguments
+def validate_args(args: argparse.Namespace):
+
+    # Validate Signal directory
+    if not args.dir.is_dir():
+        raise FileNotFoundError(f"Signal directory '{args.dir}' does not exist or is not a directory.")
+    else:
+        args.config = args.dir / "config.json"
+        args.local_state = args.dir / "Local State"
+
+        # Check for Signal's configuration file
+        if not args.config.is_file():
+            raise FileNotFoundError(f"Signal's configuration file '{args.config}' does not exist or is not a file.")
+
+        # Check for Signal's local state file
+        if not args.local_state.is_file():
+            raise FileNotFoundError(f"Signal's local state file '{args.local_state}' does not exist or is not a file.")
+
+    # Validate output directory
+    if not args.output.is_dir():
+        try:
+            os.makedirs(args.output)
+        except OSError as e:
+            raise FileNotFoundError(f"Output directory '{args.output}' does not exist and could not be created.") from e
+
+    # Validate manual mode arguments
+    if args.mode == "manual":
+        if not args.windows_user_sid:
+            raise ValueError("Windows User SID is required for manual mode.")
+        if not args.windows_password:
+            raise ValueError("Windows User Password is required for manual mode.")
+
+    # Validate key provided mode arguments
+    if args.mode in ["aux", "key"]:
+        if args.key_file:
+            if not args.key_file.is_file():
+                raise FileNotFoundError(f"Key file '{args.key_file}' does not exist or is not a file.")
+        elif not args.key:
+            raise ValueError("A key is required for Key Provided modes.")
+
+
+def main():
+    args = parse_args()
+    validate_args(args)
+
+    # Setup logging
+    quiet = args.quiet
+    verbose = 1 if args.verbose else 0
+
+    def log(message: str, level: int = 0):
+        if not quiet and (verbose >= level):
+            print(message)
+
+    # ....
+
+
+if __name__ == "__main__":
+    main()
