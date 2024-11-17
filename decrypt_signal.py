@@ -9,12 +9,13 @@ def parse_args():
     parser = argparse.ArgumentParser(
         prog="SignalDecryptor",
         description="Decrypts the forensic artifacts from Signal Desktop on Windows",
-        usage="""%(prog)s [-m auto] -o <output_dir> [-d <signal_dir> | (-c <file> -ls <file>)] [OPTIONS]
-        %(prog)s -m manual -o <output_dir> -wS <SID> -wP <password> [-d <signal_dir> | (-c <file> -ls <file>)] [OPTIONS]
-        %(prog)s -m aux -o <output_dir> [-kf <file> | -k <HEX>] [-d <signal_dir> | (-c <file> -ls <file>)] [OPTIONS]
-        %(prog)s -m key -o <output_dir> [-kf <file> | -k <HEX>] [-d <signal_dir> | (-c <file> -ls <file>)] [OPTIONS]
+        usage="""%(prog)s [-m auto] -d <signal_dir> -o <output_dir> [OPTIONS]
+        %(prog)s -m manual -d <signal_dir> -o <output_dir> -wS <SID> -wP <password> [OPTIONS]
+        %(prog)s -m aux -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
+        %(prog)s -m key -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
         """,
     )  # TODO: Better usage message
+    # [-d <signal_dir> | (-c <file> -ls <file>)]
 
     # Informational arguments
     parser.add_argument(
@@ -55,7 +56,7 @@ def parse_args():
         "-m",
         "--mode",
         help=(
-            "Mode of operation (choices: 'auto' for Auto, 'manual' for Manual, "
+            "Mode of operation (choices: 'auto' for Windows Auto, 'manual' for Windows Manual, "
             "'aux' for Auxiliary Key Provided, 'key' for Decryption Key Provided). "
             "Short aliases: -mA (Auto), -mM (Manual), -mAK (Auxiliary Key), -mDK (Decryption Key)"
             "Default: auto"
@@ -71,6 +72,7 @@ def parse_args():
         "Input/Output",
         "Arguments related to input/output paths. Output directory and either Signal's directory or configuration and local state files are required.",
     )
+    io_group.add_argument("-d", "--dir", help="Path to Signal's directory", type=pathlib.Path, metavar="<dir>")
     io_group.add_argument(
         "-o",
         "--output",
@@ -79,18 +81,15 @@ def parse_args():
         metavar="<dir>",
         required=True,
     )
-    io_group.add_argument(
-        "-d", "--dir", help="Path to Signal's directory", type=pathlib.Path, metavar="<dir>"
-    )  # TODO: Turn this into an optional argument
-    io_group.add_argument(
-        "-c", "--config", help="Path to the Signal's configuration file", type=pathlib.Path, metavar="<file>"
-    )
-    io_group.add_argument(
-        "-ls", "--local-state", help="Path to the Signal's Local State file", type=pathlib.Path, metavar="<file>"
-    )
+    # io_group.add_argument(
+    #    "-c", "--config", help="Path to the Signal's configuration file", type=pathlib.Path, metavar="<file>"
+    # )
+    # io_group.add_argument(
+    #    "-ls", "--local-state", help="Path to the Signal's Local State file", type=pathlib.Path, metavar="<file>"
+    # )
 
     # DPAPI related arguments
-    manual_group = parser.add_argument_group("Manual Mode", "Arguments required for manual mode.")
+    manual_group = parser.add_argument_group("Windows Manual Mode", "Arguments required for manual mode.")
     manual_group.add_argument("-wS", "--windows-user-sid", help="Target windows user's SID", metavar="<SID>")
     manual_group.add_argument("-wP", "--windows-password", help="Target windows user's password", metavar="<password>")
 
