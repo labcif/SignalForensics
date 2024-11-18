@@ -4,10 +4,38 @@ import os
 import json
 import base64
 import win32crypt
+import uuid
+import struct
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.hashes import Hash, SHA256
 
 VERSION = "1.0"
 
 AUX_KEY_PREFIX = "DPAPI"
+
+DPAPI_BLOB_GUID = uuid.UUID("df9d8cd0-1501-11d1-8c7a-00c04fc297eb")
+
+
+# AES-256-GCM decryption
+def aes_256_gcm_decrypt(key, nonce, ciphertext, tag):
+    decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce, tag), backend=default_backend()).decryptor()
+    return decryptor.update(ciphertext) + decryptor.finalize()
+
+
+# PBKDF2 key derivation
+def pbkdf2_derive_key(password, salt, iterations, key_length):
+    kdf = PBKDF2HMAC(algorithm=SHA256(), length=key_length, salt=salt, iterations=iterations, backend=default_backend())
+    return kdf.derive(password.encode())
+
+
+# SHA-256 hash
+def hash_sha256(data):
+    digest = Hash(SHA256(), backend=default_backend())
+    digest.update(data)
+    return digest.finalize()
 
 
 # Parse command line arguments
@@ -98,7 +126,7 @@ def parse_args():
 
     # DPAPI related arguments
     manual_group = parser.add_argument_group("Windows Manual Mode", "Arguments required for manual mode.")
-    manual_group.add_argument("-wS", "--windows-user-sid", help="Target windows user's SID", metavar="<SID>")
+    manual_group.add_argument("-wS", "--windows-sid", help="Target windows user's SID", metavar="<SID>")
     manual_group.add_argument("-wP", "--windows-password", help="Target windows user's password", metavar="<password>")
 
     # Provided key related arguments
@@ -115,7 +143,9 @@ def parse_args():
     key_group.add_argument("-k", "--key", help="Key in HEX format", type=hex_to_bytes, metavar="<HEX>")
 
     # Operational arguments
-    parser.add_argument("-sa", "--skip-attachments", help="Skip attachment decryption", action="store_true")
+    skip_group = parser.add_mutually_exclusive_group()
+    skip_group.add_argument("-sD", "--skip-decryption", help="Skip all artifact decryption", action="store_true")
+    skip_group.add_argument("-sA", "--skip-attachments", help="Skip attachment decryption", action="store_true")
 
     # Verbosity arguments
     verbosity_group = parser.add_mutually_exclusive_group()
@@ -187,6 +217,44 @@ def unprotect_with_dpapi(data: bytes):
         raise ValueError("Failed to unprotect the auxiliary key with DPAPI.") from e
 
 
+def extract_info_from_blob(data: bytes):
+    try:
+        log("Extracting information from DPAPI BLOB...", 2)
+        master_key_guid = uuid.UUID(bytes_le=data[24:40]).hex
+        log(f"> Master Key GUID: {master_key_guid}", 3)
+        desc_len = struct.unpack("<I", data[44:48])[0]
+        idx = 48 + desc_len + 16
+        salt_len = struct.unpack("<I", data[idx : idx + 4])[0]
+        idx += 4
+        salt = data[idx : idx + salt_len]
+        log(f"> Salt: {bytes_to_hex(salt)}", 3)
+        idx += salt_len
+        hmac_key_len = struct.unpack("<I", data[idx : idx + 4])[0]
+        idx += 4 + hmac_key_len + 8
+        hmac_key_len = struct.unpack("<I", data[idx : idx + 4])[0]
+        idx += 4 + hmac_key_len
+        data_len = struct.unpack("<I", data[idx : idx + 4])[0]
+        idx += 4
+        cipher_data = data[idx : idx + data_len]
+        log(f"> Cipher Data: {bytes_to_hex(cipher_data)}", 3)
+        return master_key_guid, salt, cipher_data
+    except Exception as e:
+        raise MalformedKeyError("Failed to extract information from the auxiliary key blob.") from e
+
+
+def unprotect_manually(data: bytes, sid: str, password: str):
+    try:
+        log("Unprotecting the auxiliary key manually...", 1)
+        master_key_guid, salt, cipher_data = extract_info_from_blob(data)
+        log("Crafting the master key path...", 2)
+        master_key_path = pathlib.Path(os.getenv("APPDATA")) / "Microsoft" / "Protect" / sid / master_key_guid
+        log(f"> Master Key Path: {master_key_path}", 3)
+
+        raise NotImplementedError("Manual mode is not implemented yet.")
+    except Exception as e:
+        raise MalformedKeyError("Failed to unprotect the auxiliary key manually.") from e
+
+
 def fetch_aux_key(args: argparse.Namespace):
     # If the user provided the auxiliary key, return it
     if args.mode == "aux":
@@ -217,8 +285,14 @@ def fetch_aux_key(args: argparse.Namespace):
             except IndexError:
                 raise MalformedKeyError("The encrypted key is malformed.")
 
+            # Check if this is a DPAPI blob
+            if encrypted_key[4:20] != DPAPI_BLOB_GUID.bytes_le:
+                raise MalformedKeyError("The encrypted auxiliary key is not in the expected DPAPI BLOB format.")
+
             if args.mode == "auto":
                 return unprotect_with_dpapi(encrypted_key)
+            elif args.mode == "manual":
+                raise unprotect_manually(encrypted_key, args.windows_user_sid, args.windows_password)
     return None
 
 
@@ -226,17 +300,24 @@ def bytes_to_hex(data: bytes):
     return "".join(f"{b:02x}" for b in data)
 
 
+quiet = False
+verbose = 0
+
+
+def log(message: str, level: int = 0):
+    # NOTE: Currently, different verbosity levels are not implemented
+    if not quiet and (verbose >= level):
+        print(message)
+
+
 def main():
     args = parse_args()
     validate_args(args)
 
     # Setup logging
+    global quiet, verbose
     quiet = args.quiet
-    verbose = 1 if args.verbose else 0
-
-    def log(message: str, level: int = 0):
-        if not quiet and (verbose >= level):
-            print(message)
+    verbose = 3 if args.verbose else 0
 
     if args.mode != "key":
         aux_key = fetch_aux_key(args)
