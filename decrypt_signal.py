@@ -1,8 +1,13 @@
 import argparse
 import pathlib
 import os
+import json
+import base64
+import win32crypt
 
 VERSION = "1.0"
+
+AUX_KEY_PREFIX = "DPAPI"
 
 
 # Parse command line arguments
@@ -162,6 +167,65 @@ def validate_args(args: argparse.Namespace):
             raise ValueError("A key is required for Key Provided modes.")
 
 
+class MalformedInputFileError(Exception):
+    """Exception raised for a malformed input file."""
+
+    pass
+
+
+class MalformedKeyError(Exception):
+    """Exception raised for a malformed key."""
+
+    pass
+
+
+def unprotect_with_dpapi(data: bytes):
+    try:
+        _, decrypted_data = win32crypt.CryptUnprotectData(data)
+        return decrypted_data
+    except Exception as e:
+        raise ValueError("Failed to unprotect the auxiliary key with DPAPI.") from e
+
+
+def fetch_aux_key(args: argparse.Namespace):
+    # If the user provided the auxiliary key, return it
+    if args.mode == "aux":
+        # If a key file is provided, read the key from the file
+        if args.key_file:
+            with args.key_file.open("r") as f:
+                return bytes.fromhex(f.read().strip())
+        return args.key
+    else:
+        with args.local_state.open("r") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                raise MalformedInputFileError("The Local State file was malformed: Invalid JSON structure.")
+
+            # Validate the presence of "os_crypt" and "encrypted_key"
+            encrypted_key = data.get("os_crypt", {}).get("encrypted_key")
+            if not encrypted_key:
+                raise MalformedInputFileError(
+                    "The Local State file was malformed: Missing the encrypted auxiliary key."
+                )
+
+            # Decode the base64 encoded key and remove the prefix
+            try:
+                encrypted_key = base64.b64decode(encrypted_key)[len(AUX_KEY_PREFIX) :]
+            except ValueError:
+                raise MalformedKeyError("The encrypted key is not a valid base64 string.")
+            except IndexError:
+                raise MalformedKeyError("The encrypted key is malformed.")
+
+            if args.mode == "auto":
+                return unprotect_with_dpapi(encrypted_key)
+    return None
+
+
+def bytes_to_hex(data: bytes):
+    return "".join(f"{b:02x}" for b in data)
+
+
 def main():
     args = parse_args()
     validate_args(args)
@@ -173,6 +237,12 @@ def main():
     def log(message: str, level: int = 0):
         if not quiet and (verbose >= level):
             print(message)
+
+    if args.mode != "key":
+        aux_key = fetch_aux_key(args)
+        if aux_key:
+            print(bytes_to_hex(aux_key))
+            return
 
     # ....
 
