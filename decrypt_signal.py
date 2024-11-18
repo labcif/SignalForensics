@@ -10,7 +10,7 @@ import struct
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives.hashes import Hash, SHA256
+from cryptography.hazmat.primitives.hashes import Hash, SHA256, SHA512
 
 VERSION = "1.0"
 
@@ -26,16 +26,48 @@ def aes_256_gcm_decrypt(key, nonce, ciphertext, tag):
 
 
 # PBKDF2 key derivation
-def pbkdf2_derive_key(password, salt, iterations, key_length):
-    kdf = PBKDF2HMAC(algorithm=SHA256(), length=key_length, salt=salt, iterations=iterations, backend=default_backend())
+def pbkdf2_derive_key(algorithm, password, salt, iterations, key_length):
+    kdf = PBKDF2HMAC(
+        algorithm=algorithm, length=key_length, salt=salt, iterations=iterations, backend=default_backend()
+    )
     return kdf.derive(password.encode())
 
 
+# Hashing algorithm
+def hash_algorithm(data, algorithm, rounds=1):
+    for _ in range(rounds):
+        digest = Hash(algorithm, backend=default_backend())
+        digest.update(data)
+        data = digest.finalize()
+    return data
+
+
 # SHA-256 hash
-def hash_sha256(data):
-    digest = Hash(SHA256(), backend=default_backend())
-    digest.update(data)
-    return digest.finalize()
+def hash_sha256(data, rounds=1):
+    return hash_algorithm(data, SHA256(), rounds)
+
+
+# SHA-512 hash
+def hash_sha512(data, rounds=1):
+    return hash_algorithm(data, SHA512(), rounds)
+
+
+# def hash_from_alg_id(data, alg_id, rounds=1):
+#    if alg_id == 32780:
+#        return hash_sha256(data, rounds)
+#    elif alg_id == 32782:
+#        return hash_sha512(data, rounds)
+#    else:
+#        raise ValueError(f"Unsupported hash algorithm ID: {alg_id}")
+
+
+def get_hash_algorithm(alg_id):
+    if alg_id == 32780:
+        return SHA256()
+    elif alg_id == 32782:
+        return SHA512()
+    else:
+        raise ValueError(f"Unsupported hash algorithm ID: {alg_id}")
 
 
 # Parse command line arguments
@@ -217,9 +249,9 @@ def unprotect_with_dpapi(data: bytes):
         raise ValueError("Failed to unprotect the auxiliary key with DPAPI.") from e
 
 
-def extract_info_from_blob(data: bytes):
+def process_dpapi_blob(data: bytes):
     try:
-        log("Extracting information from DPAPI BLOB...", 2)
+        log("Extracting data from DPAPI BLOB...", 2)
         master_key_guid = uuid.UUID(bytes_le=data[24:40]).hex
         log(f"> Master Key GUID: {master_key_guid}", 3)
         desc_len = struct.unpack("<I", data[44:48])[0]
@@ -227,7 +259,7 @@ def extract_info_from_blob(data: bytes):
         salt_len = struct.unpack("<I", data[idx : idx + 4])[0]
         idx += 4
         salt = data[idx : idx + salt_len]
-        log(f"> Salt: {bytes_to_hex(salt)}", 3)
+        log(f"> BLOB Salt: {bytes_to_hex(salt)}", 3)
         idx += salt_len
         hmac_key_len = struct.unpack("<I", data[idx : idx + 4])[0]
         idx += 4 + hmac_key_len + 8
@@ -242,13 +274,40 @@ def extract_info_from_blob(data: bytes):
         raise MalformedKeyError("Failed to extract information from the auxiliary key blob.") from e
 
 
+def process_dpapi_master_key_file(master_key_path: pathlib.Path):
+    # TODO: Better exception here
+    if not master_key_path.is_file():
+        raise FileNotFoundError(f"Master Key file '{master_key_path}' does not exist or is not a file.")
+    log("Reading from the master key file...", 3)
+    with master_key_path.open("rb") as f:
+        data = f.read()
+    log("Processing the master key file...", 2)
+
+    idx = 100
+    master_key_len = struct.unpack("<Q", data[idx : idx + 8])[0]
+    idx += 8 + 24 + 4
+    salt = data[idx : idx + 16]
+    log(f"> Master Key Salt: {bytes_to_hex(salt)}", 3)
+    idx += 16
+    rounds = struct.unpack("<I", data[idx : idx + 4])[0]
+    log(f"> Rounds: {rounds}", 3)
+    idx += 4
+    hash_alg_id = struct.unpack("<I", data[idx : idx + 4])[0]
+    log(f"> Algorithm Hash ID: {hash_alg_id}", 3)
+    idx += 4 + 4
+    encrypted_master_key = data[idx : idx + master_key_len - 32]  # NOTE: No idea why -32, but it works
+    log(f"> Encrypted Master Key: {bytes_to_hex(encrypted_master_key)}", 3)
+    return salt, rounds, hash_alg_id, master_key_len, encrypted_master_key
+
+
 def unprotect_manually(data: bytes, sid: str, password: str):
     try:
         log("Unprotecting the auxiliary key manually...", 1)
-        master_key_guid, salt, cipher_data = extract_info_from_blob(data)
+        master_key_guid, blob_salt, cipher_data = process_dpapi_blob(data)
         log("Crafting the master key path...", 2)
         master_key_path = pathlib.Path(os.getenv("APPDATA")) / "Microsoft" / "Protect" / sid / master_key_guid
         log(f"> Master Key Path: {master_key_path}", 3)
+        mk_salt, hash_rounds, hash_alg_id, mk_len, encrypted_master_key = process_dpapi_master_key_file(master_key_path)
 
         raise NotImplementedError("Manual mode is not implemented yet.")
     except Exception as e:
