@@ -7,10 +7,11 @@ import win32crypt
 import uuid
 import struct
 
+from Crypto.Hash import MD4
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives.hashes import Hash, SHA256, SHA512
+from cryptography.hazmat.primitives.hashes import Hash, SHA256, SHA512, SHA1
 
 VERSION = "1.0"
 
@@ -30,7 +31,7 @@ def pbkdf2_derive_key(algorithm, password, salt, iterations, key_length):
     kdf = PBKDF2HMAC(
         algorithm=algorithm, length=key_length, salt=salt, iterations=iterations, backend=default_backend()
     )
-    return kdf.derive(password.encode())
+    return kdf.derive(password)
 
 
 # Hashing algorithm
@@ -50,6 +51,16 @@ def hash_sha256(data, rounds=1):
 # SHA-512 hash
 def hash_sha512(data, rounds=1):
     return hash_algorithm(data, SHA512(), rounds)
+
+
+# SHA-1 hash
+def hash_sha1(data, rounds=1):
+    return hash_algorithm(data, SHA1(), rounds)
+
+
+# MD4 hash
+def hash_md4(data):
+    return MD4.new(data).digest()
 
 
 # def hash_from_alg_id(data, alg_id, rounds=1):
@@ -76,9 +87,9 @@ def parse_args():
         prog="SignalDecryptor",
         description="Decrypts the forensic artifacts from Signal Desktop on Windows",
         usage="""%(prog)s [-m auto] -d <signal_dir> -o <output_dir> [OPTIONS]
-        %(prog)s -m manual -d <signal_dir> -o <output_dir> -wS <SID> -wP <password> [OPTIONS]
         %(prog)s -m aux -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
         %(prog)s -m key -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
+        %(prog)s -m manual -d <signal_dir> -o <output_dir> -wS <SID> -wP <password> [OPTIONS]
         """,
     )  # TODO: Better usage message
     # [-d <signal_dir> | (-c <file> -ls <file>)]
@@ -122,14 +133,14 @@ def parse_args():
         "-m",
         "--mode",
         help=(
-            "Mode of operation (choices: 'auto' for Windows Auto, 'manual' for Windows Manual, "
-            "'aux' for Auxiliary Key Provided, 'key' for Decryption Key Provided). "
-            "Short aliases: -mA (Auto), -mM (Manual), -mAK (Auxiliary Key), -mDK (Decryption Key)"
+            "Mode of operation (choices: 'auto' for Windows Auto, 'aux' for Auxiliary Key Provided, "
+            "'key' for Decryption Key Provided), 'manual' for Windows Manual. "
+            "Short aliases: -mA (Auto), -mAK (Auxiliary Key), -mDK (Decryption Key), -mM (Manual)"
             "Default: auto"
         ),
         type=parse_mode,
-        choices=["auto", "manual", "aux", "key"],
-        metavar="{auto|manual|aux|key}",
+        choices=["auto", "aux", "key", "manual"],
+        metavar="{auto|aux|key|manual}",
         default="auto",
     )
 
@@ -156,11 +167,6 @@ def parse_args():
     #    "-ls", "--local-state", help="Path to the Signal's Local State file", type=pathlib.Path, metavar="<file>"
     # )
 
-    # DPAPI related arguments
-    manual_group = parser.add_argument_group("Windows Manual Mode", "Arguments required for manual mode.")
-    manual_group.add_argument("-wS", "--windows-sid", help="Target windows user's SID", metavar="<SID>")
-    manual_group.add_argument("-wP", "--windows-password", help="Target windows user's password", metavar="<password>")
-
     # Provided key related arguments
     key_group = parser.add_argument_group(
         "Key Provided Modes", "Arguments available for both Key Provided modes."
@@ -174,6 +180,11 @@ def parse_args():
     )
     key_group.add_argument("-k", "--key", help="Key in HEX format", type=hex_to_bytes, metavar="<HEX>")
 
+    # DPAPI related arguments
+    # manual_group = parser.add_argument_group("Windows Manual Mode", "Arguments required for manual mode.")
+    # manual_group.add_argument("-wS", "--windows-sid", help="Target windows user's SID", metavar="<SID>")
+    # manual_group.add_argument("-wP", "--windows-password", help="Target windows user's password", metavar="<password>")
+
     # Operational arguments
     skip_group = parser.add_mutually_exclusive_group()
     skip_group.add_argument("-sD", "--skip-decryption", help="Skip all artifact decryption", action="store_true")
@@ -181,7 +192,7 @@ def parse_args():
 
     # Verbosity arguments
     verbosity_group = parser.add_mutually_exclusive_group()
-    verbosity_group.add_argument("-v", "--verbose", help="Enable verbose output", action="store_true")
+    verbosity_group.add_argument("-v", "--verbose", help="Enable verbose output", action="count", default=0)
     verbosity_group.add_argument("-q", "--quiet", help="Enable quiet output", action="store_true")
 
     # Parse arguments
@@ -215,7 +226,7 @@ def validate_args(args: argparse.Namespace):
 
     # Validate manual mode arguments
     if args.mode == "manual":
-        if not args.windows_user_sid:
+        if not args.windows_sid:
             raise ValueError("Windows User SID is required for manual mode.")
         if not args.windows_password:
             raise ValueError("Windows User Password is required for manual mode.")
@@ -252,10 +263,10 @@ def unprotect_with_dpapi(data: bytes):
 def process_dpapi_blob(data: bytes):
     try:
         log("Extracting data from DPAPI BLOB...", 2)
-        master_key_guid = uuid.UUID(bytes_le=data[24:40]).hex
+        master_key_guid = str(uuid.UUID(bytes_le=data[24:40]))
         log(f"> Master Key GUID: {master_key_guid}", 3)
         desc_len = struct.unpack("<I", data[44:48])[0]
-        idx = 48 + desc_len + 16
+        idx = 48 + desc_len + 8
         salt_len = struct.unpack("<I", data[idx : idx + 4])[0]
         idx += 4
         salt = data[idx : idx + salt_len]
@@ -283,7 +294,7 @@ def process_dpapi_master_key_file(master_key_path: pathlib.Path):
         data = f.read()
     log("Processing the master key file...", 2)
 
-    idx = 100
+    idx = 96
     master_key_len = struct.unpack("<Q", data[idx : idx + 8])[0]
     idx += 8 + 24 + 4
     salt = data[idx : idx + 16]
@@ -308,6 +319,15 @@ def unprotect_manually(data: bytes, sid: str, password: str):
         master_key_path = pathlib.Path(os.getenv("APPDATA")) / "Microsoft" / "Protect" / sid / master_key_guid
         log(f"> Master Key Path: {master_key_path}", 3)
         mk_salt, hash_rounds, hash_alg_id, mk_len, encrypted_master_key = process_dpapi_master_key_file(master_key_path)
+        log("Deriving the master key's encription key...", 2)
+        hash_alg = get_hash_algorithm(hash_alg_id)
+        nt_hash = hash_sha1(password.encode("utf-16le"))
+        log(f"> NT Hash: {bytes_to_hex(nt_hash)}", 3)
+        mk_encryption_key = pbkdf2_derive_key(hash_alg, nt_hash, mk_salt, hash_rounds, 32)
+        log(f"> Master Key Encryption Key: {bytes_to_hex(mk_encryption_key)}", 3)
+        log("Decrypting the master key...", 2)
+
+        # TODO: List requirements for manual acquisition of Aux Key?
 
         raise NotImplementedError("Manual mode is not implemented yet.")
     except Exception as e:
@@ -351,7 +371,7 @@ def fetch_aux_key(args: argparse.Namespace):
             if args.mode == "auto":
                 return unprotect_with_dpapi(encrypted_key)
             elif args.mode == "manual":
-                raise unprotect_manually(encrypted_key, args.windows_user_sid, args.windows_password)
+                return unprotect_manually(encrypted_key, args.windows_sid, args.windows_password)
     return None
 
 
@@ -364,7 +384,6 @@ verbose = 0
 
 
 def log(message: str, level: int = 0):
-    # NOTE: Currently, different verbosity levels are not implemented
     if not quiet and (verbose >= level):
         print(message)
 
@@ -376,7 +395,7 @@ def main():
     # Setup logging
     global quiet, verbose
     quiet = args.quiet
-    verbose = 3 if args.verbose else 0
+    verbose = args.verbose
 
     if args.mode != "key":
         aux_key = fetch_aux_key(args)
