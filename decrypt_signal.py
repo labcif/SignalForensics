@@ -8,6 +8,7 @@ import uuid
 import struct
 import random
 import string
+import mimetypes
 
 # from Crypto.Hash import MD4
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -15,7 +16,6 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.hashes import Hash, SHA256, SHA512, SHA1
 
-import sqlite3
 import sqlcipher3
 
 ####################### CONSTANTS #######################
@@ -48,6 +48,12 @@ class MalformedKeyError(Exception):
 # AES-256-GCM decryption
 def aes_256_gcm_decrypt(key, nonce, ciphertext, tag):
     decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce, tag), backend=default_backend()).decryptor()
+    return decryptor.update(ciphertext) + decryptor.finalize()
+
+
+# AES-256-CBC encryption
+def aes_256_cbc_decrypt(key, nonce, ciphertext):
+    decryptor = Cipher(algorithms.AES(key), modes.CBC(nonce), backend=default_backend()).decryptor()
     return decryptor.update(ciphertext) + decryptor.finalize()
 
 
@@ -486,13 +492,81 @@ def open_sqlcipher_db(args: argparse.Namespace, key: bytes):
     # Export a decrypted copy of the database
     if not args.skip_database:
         unencrypted_db_path = args.output / "db.sqlite"
-        udb_name = generate_db_name()
-        cursor.execute(f"ATTACH DATABASE '{unencrypted_db_path}' AS {udb_name} KEY '';")
-        cursor.execute(f"SELECT sqlcipher_export('{udb_name}');")
-        cursor.execute(f"DETACH DATABASE {udb_name};")
-        log(f"[i] Exported the unencryted database")
+        if unencrypted_db_path.is_file():
+            log("[!] The output directory already contains an SQLite DB, skipping export")
+        else:
+            udb_name = generate_db_name()
+            cursor.execute(f"ATTACH DATABASE '{unencrypted_db_path}' AS {udb_name} KEY '';")
+            cursor.execute(f"SELECT sqlcipher_export('{udb_name}');")
+            cursor.execute(f"DETACH DATABASE {udb_name};")
+            log(f"[i] Exported the unencryted database")
 
     return conn, cursor
+
+
+def export_attachments(cursor, args: argparse.Namespace):
+    attachments_dir = args.output / "attachments"
+    attachments_dir.mkdir(parents=True, exist_ok=True)
+
+    # Fetch all attachment data
+    log("[i] Fetching attachment metadata...", 2)
+    try:
+        cursor.execute("SELECT json from messages WHERE hasFileAttachments = TRUE OR hasAttachments = TRUE;")
+        messages = cursor.fetchall()
+    except sqlcipher3.DatabaseError as e:
+        raise sqlcipher3.DatabaseError("Failed to fetch attachment metadata.") from e
+
+    if len(messages) == 0:
+        log("[i] No attachments were found in the database")
+        return
+
+    # Process each attachment
+    log("[i] Processing metadata and decrypting attachments...", 2)
+    counts = 0
+    error = 0
+    for entry in messages:
+        # Parse the message metadata
+        attachments = json.loads(entry[0])["attachments"]
+
+        # For each attachment in the message
+        for attachment in attachments:
+            subpath = attachment["path"]
+            try:
+                # Fetch attachment crypto data
+                key = base64.b64decode(attachment["localKey"])[:32]
+                nonce = base64.b64decode(attachment["iv"])
+
+                # Fetch attachment cipherdata
+                enc_attachment_path = args.dir / "attachments.noindex" / subpath
+                with enc_attachment_path.open("rb") as f:
+                    enc_attachment_data = f.read()
+
+                # Decrypt the attachment
+                attachment_data = aes_256_cbc_decrypt(key, nonce, enc_attachment_data)
+                attachment_data = attachment_data[16:]  # Dismiss the first 16 bytes
+
+                # REVIEW: Need to check if padding is an issue...
+                # TODO: Check HMAC?
+
+                # Save the attachment to a file
+                filePath = subpath
+                if "contentType" in attachment:
+                    filePath += f"{mime_to_extension(attachment['contentType'])}"
+
+                attachment_path = attachments_dir / filePath
+                # Ensure the parent directory exists
+                attachment_path.parent.mkdir(parents=True, exist_ok=True)
+
+                with attachment_path.open("wb") as f:
+                    f.write(attachment_data)
+                counts += 1
+            except Exception as e:
+                error += 1
+                log(f"[!] Failed to export attachment {subpath}: {e}", 3)
+
+    log(f"[i] Exported {counts} attachments")
+    if error > 0:
+        log(f"[!] Failed to export {error} attachments")
 
 
 ####################### MISC HELPER FUNCTIONS #######################
@@ -504,6 +578,11 @@ def generate_db_name(length=8, prefix="signal"):
 
 def bytes_to_hex(data: bytes):
     return "".join(f"{b:02x}" for b in data)
+
+
+def mime_to_extension(mime_type):
+    extension = mimetypes.guess_extension(mime_type)
+    return extension
 
 
 quiet = False
@@ -523,7 +602,7 @@ def main():
 
     # Parse and validate arguments
     args = parse_args()
-    validate_args(args)  # TODO: Check if output dir is empty
+    validate_args(args)
 
     # Setup logging
     global quiet, verbose
@@ -559,7 +638,13 @@ def main():
     log("[i] Opening SQLCipher database")
     db_conn, db_cursor = open_sqlcipher_db(args, decryption_key)
 
+    # Attachments decryption
+    if not args.skip_attachments:
+        log("[i] Exporting attachments...")
+        export_attachments(db_cursor, args)
+
     # Close the database connection
+    log("Closing the database connections...", 3)
     db_cursor.close()
     db_conn.close()
 
