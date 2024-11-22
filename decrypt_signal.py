@@ -442,6 +442,7 @@ def log(message: str, level: int = 0):
 
 
 def main():
+    # Parse and validate arguments
     args = parse_args()
     validate_args(args)
 
@@ -450,9 +451,10 @@ def main():
     quiet = args.quiet
     verbose = args.verbose
 
-    #
+    # Initialize decryption key
     decryption_key = None
 
+    # Fetch the decryption key
     if args.mode == "key":
         log("Fetching decryption key...", 1)
         decryption_key = fetch_key_from_args(args)
@@ -471,9 +473,8 @@ def main():
         log(f"> Decryption Key: {bytes_to_hex(decryption_key)}", 2)
         print("[i] Loaded decryption key")
 
-        return
-
     # ....
+    return
 
 
 if __name__ == "__main__":
