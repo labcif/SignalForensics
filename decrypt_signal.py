@@ -13,6 +13,8 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.hashes import Hash, SHA256, SHA512, SHA1
 
+
+####################### CONSTANTS #######################
 VERSION = "1.0"
 
 AUX_KEY_PREFIX = "DPAPI"
@@ -20,6 +22,23 @@ AUX_KEY_PREFIX = "DPAPI"
 DEC_KEY_PREFIX = "v10"
 
 DPAPI_BLOB_GUID = uuid.UUID("df9d8cd0-1501-11d1-8c7a-00c04fc297eb")
+
+####################### EXCEPTIONS #######################
+
+
+class MalformedInputFileError(Exception):
+    """Exception raised for a malformed input file."""
+
+    pass
+
+
+class MalformedKeyError(Exception):
+    """Exception raised for a malformed key."""
+
+    pass
+
+
+####################### Cryptography #######################
 
 
 # AES-256-GCM decryption
@@ -81,6 +100,9 @@ def get_hash_algorithm(alg_id):
         return SHA512()
     else:
         raise ValueError(f"Unsupported hash algorithm ID: {alg_id}")
+
+
+####################### I/O ARGS #######################
 
 
 # Parse command line arguments
@@ -246,16 +268,7 @@ def validate_args(args: argparse.Namespace):
         raise ValueError("Decryption cannot be skipped when providing the decryption key.")
 
 
-class MalformedInputFileError(Exception):
-    """Exception raised for a malformed input file."""
-
-    pass
-
-
-class MalformedKeyError(Exception):
-    """Exception raised for a malformed key."""
-
-    pass
+####################### DPAPI #######################
 
 
 def unprotect_with_dpapi(data: bytes):
@@ -265,6 +278,9 @@ def unprotect_with_dpapi(data: bytes):
         return decrypted_data
     except Exception as e:
         raise ValueError("Failed to unprotect the auxiliary key with DPAPI.") from e
+
+
+####################### MANUAL MODE FUNCTIONS #######################
 
 
 def process_dpapi_blob(data: bytes):
@@ -313,7 +329,7 @@ def process_dpapi_master_key_file(master_key_path: pathlib.Path):
     hash_alg_id = struct.unpack("<I", data[idx : idx + 4])[0]
     log(f"> Algorithm Hash ID: {hash_alg_id}", 3)
     idx += 4 + 4
-    encrypted_master_key = data[idx : idx + master_key_len - 32]  # NOTE: No idea why -32, but it works
+    encrypted_master_key = data[idx : idx + master_key_len - 32]
     log(f"> Encrypted Master Key: {bytes_to_hex(encrypted_master_key)}", 3)
     return salt, rounds, hash_alg_id, master_key_len, encrypted_master_key
 
@@ -339,6 +355,9 @@ def unprotect_manually(data: bytes, sid: str, password: str):
         raise NotImplementedError("Manual mode is not implemented yet.")
     except Exception as e:
         raise MalformedKeyError("Failed to unprotect the auxiliary key manually.") from e
+
+
+####################### KEY FETCHING #######################
 
 
 def fetch_key_from_args(args: argparse.Namespace):
@@ -428,6 +447,9 @@ def fetch_decryption_key(args: argparse.Namespace, aux_key: bytes):
     return None
 
 
+####################### MISC HELPER FUNCTIONS #######################
+
+
 def bytes_to_hex(data: bytes):
     return "".join(f"{b:02x}" for b in data)
 
@@ -439,6 +461,9 @@ verbose = 0
 def log(message: str, level: int = 0):
     if not quiet and (verbose >= level):
         print(message)
+
+
+####################### MAIN FUNCTION #######################
 
 
 def main():
