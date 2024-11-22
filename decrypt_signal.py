@@ -3,11 +3,11 @@ import pathlib
 import os
 import json
 import base64
-import win32crypt
+import win32crypt  # TODO: Separate DPAPI from the rest of the script
 import uuid
 import struct
 
-from Crypto.Hash import MD4
+# from Crypto.Hash import MD4
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -61,8 +61,8 @@ def hash_sha1(data, rounds=1):
 
 
 # MD4 hash
-def hash_md4(data):
-    return MD4.new(data).digest()
+# def hash_md4(data):
+#    return MD4.new(data).digest()
 
 
 # def hash_from_alg_id(data, alg_id, rounds=1):

@@ -1,1 +1,2 @@
-argparse==1.4.0
+cryptography==43.0.3
+pywin32==306
