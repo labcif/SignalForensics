@@ -444,8 +444,6 @@ def fetch_decryption_key(args: argparse.Namespace, aux_key: bytes):
 
         return bytes.fromhex(decrypted_key.decode("utf-8"))
 
-    return None
-
 
 ####################### MISC HELPER FUNCTIONS #######################
 
@@ -484,21 +482,24 @@ def main():
         log("Fetching decryption key...", 1)
         decryption_key = fetch_key_from_args(args)
         log(f"> Decryption Key: {bytes_to_hex(decryption_key)}", 2)
-        print("[i] Loaded decryption key")
+        log("[i] Loaded decryption key")
     else:
-        log("Fetching auxiliary key...", 1)
+        log("[i] Fetching auxiliary key...")
         aux_key = fetch_aux_key(args)
-        if len(aux_key) != 32:
+        if not aux_key or len(aux_key) != 32:
             raise MalformedKeyError("The auxiliary key is not 32 bytes long.")
         log(f"> Auxiliary Key: {bytes_to_hex(aux_key)}", 2)
-        print("[i] Loaded auxiliary key")
+        log("[i] Loaded auxiliary key")
 
-        print("[i] Decrypting the decryption key...")
+        log("[i] Decrypting the decryption key...")
         decryption_key = fetch_decryption_key(args, aux_key)
-        log(f"> Decryption Key: {bytes_to_hex(decryption_key)}", 2)
-        print("[i] Loaded decryption key")
+        log(f"[i] SQLCipher Key: {bytes_to_hex(decryption_key)}")
 
-    # ....
+    # Skip decryption if requested
+    if args.skip_decryption:
+        return
+
+    # Decrypt the database
     return
 
 
