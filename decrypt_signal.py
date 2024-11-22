@@ -212,13 +212,16 @@ def parse_args():
     # manual_group.add_argument("-wS", "--windows-sid", help="Target windows user's SID", metavar="<SID>")
     # manual_group.add_argument("-wP", "--windows-password", help="Target windows user's password", metavar="<password>")
 
-    # Operational arguments
-    skip_group = parser.add_mutually_exclusive_group()
-    skip_group.add_argument(
+    # Operational/Options arguments
+    parser.add_argument(
         "-nd", "--no-decryption", help="No decription, just print the SQLCipher key", action="store_true"
     )
-    skip_group.add_argument("-sA", "--skip-attachments", help="Skip attachment decryption", action="store_true")
-    skip_group.add_argument("-sD", "--skip-database", help="Skip unencrypted database exportation", action="store_true")
+    parser.add_argument("-sD", "--skip-database", help="Skip unencrypted database exportation", action="store_true")
+    parser.add_argument("-sA", "--skip-attachments", help="Skip attachment decryption", action="store_true")
+    # parser.add_argument(
+    #    "-iM", "--include-metadata", help="Print user metadata from Signal database", action="store_true"
+    # )
+
     # Verbosity arguments
     verbosity_group = parser.add_mutually_exclusive_group()
     verbosity_group.add_argument("-v", "--verbose", help="Enable verbose output", action="count", default=0)
@@ -496,7 +499,7 @@ def open_sqlcipher_db(args: argparse.Namespace, key: bytes):
 
 
 def generate_db_name(length=8, prefix="signal"):
-    return f"{prefix}_".join(random.choices(string.ascii_lowercase + string.digits, k=length))
+    return f"{prefix}_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 
 def bytes_to_hex(data: bytes):
@@ -520,7 +523,7 @@ def main():
 
     # Parse and validate arguments
     args = parse_args()
-    validate_args(args)
+    validate_args(args)  # TODO: Check if output dir is empty
 
     # Setup logging
     global quiet, verbose
@@ -553,7 +556,7 @@ def main():
         return
 
     # Decrypt and process the SQLCipher database
-    log("[i] Decrypting the SQLCipher database...", 1)
+    log("[i] Opening SQLCipher database")
     db_conn, db_cursor = open_sqlcipher_db(args, decryption_key)
 
     # Close the database connection
