@@ -6,6 +6,8 @@ import base64
 import win32crypt  # TODO: Separate DPAPI from the rest of the script
 import uuid
 import struct
+import random
+import string
 
 # from Crypto.Hash import MD4
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -13,6 +15,8 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.hashes import Hash, SHA256, SHA512, SHA1
 
+import sqlite3
+import sqlcipher3
 
 ####################### CONSTANTS #######################
 VERSION = "1.0"
@@ -182,7 +186,6 @@ def parse_args():
         help="Path to the output directory",
         type=pathlib.Path,
         metavar="<dir>",
-        required=True,
     )
     # io_group.add_argument(
     #    "-c", "--config", help="Path to the Signal's configuration file", type=pathlib.Path, metavar="<file>"
@@ -211,9 +214,11 @@ def parse_args():
 
     # Operational arguments
     skip_group = parser.add_mutually_exclusive_group()
-    skip_group.add_argument("-sD", "--skip-decryption", help="Skip all artifact decryption", action="store_true")
+    skip_group.add_argument(
+        "-nd", "--no-decryption", help="No decription, just print the SQLCipher key", action="store_true"
+    )
     skip_group.add_argument("-sA", "--skip-attachments", help="Skip attachment decryption", action="store_true")
-
+    skip_group.add_argument("-sD", "--skip-database", help="Skip unencrypted database exportation", action="store_true")
     # Verbosity arguments
     verbosity_group = parser.add_mutually_exclusive_group()
     verbosity_group.add_argument("-v", "--verbose", help="Enable verbose output", action="count", default=0)
@@ -242,7 +247,11 @@ def validate_args(args: argparse.Namespace):
             raise FileNotFoundError(f"Signal's local state file '{args.local_state}' does not exist or is not a file.")
 
     # Validate output directory
-    if not args.output.is_dir():
+    if not args.output:
+        if not args.no_decryption:
+            log("[!] No output directory provided, assuming no decryption is required")
+        args.no_decryption = True
+    elif not args.output.is_dir():
         try:
             os.makedirs(args.output)
         except OSError as e:
@@ -272,7 +281,7 @@ def validate_args(args: argparse.Namespace):
 
 
 def unprotect_with_dpapi(data: bytes):
-    log("Unprotecting the auxiliary key through DPAPI...", 1)
+    log("[i] Unprotecting the auxiliary key through DPAPI...", 1)
     try:
         _, decrypted_data = win32crypt.CryptUnprotectData(data)
         return decrypted_data
@@ -336,7 +345,7 @@ def process_dpapi_master_key_file(master_key_path: pathlib.Path):
 
 def unprotect_manually(data: bytes, sid: str, password: str):
     try:
-        log("Unprotecting the auxiliary key manually...", 1)
+        log("[i] Unprotecting the auxiliary key manually...", 1)
         master_key_guid, blob_salt, cipher_data = process_dpapi_blob(data)
         log("Crafting the master key path...", 2)
         master_key_path = pathlib.Path(os.getenv("APPDATA")) / "Microsoft" / "Protect" / sid / master_key_guid
@@ -445,7 +454,49 @@ def fetch_decryption_key(args: argparse.Namespace, aux_key: bytes):
         return bytes.fromhex(decrypted_key.decode("utf-8"))
 
 
+####################### SQLCIPHER & DATABASE #######################
+
+
+def open_sqlcipher_db(args: argparse.Namespace, key: bytes):
+    db_path = args.dir / "sql" / "db.sqlite"
+    cipher_key = bytes_to_hex(key)
+
+    if not db_path.is_file():
+        raise FileNotFoundError(f"Encrypted database '{db_path}' does not exist or is not a file.")
+
+    # Connect to the database
+    conn = sqlcipher3.connect(db_path)
+    cursor = conn.cursor()
+
+    # Decrypt the database
+    statement = f"PRAGMA key = \"x'{cipher_key}'\""
+    log(f"Executing: {statement}", 3)
+    cursor.execute(statement)
+
+    # Test if the decryption key is correct
+    try:
+        log("Testing the decryption key...", 2)
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
+    except sqlcipher3.DatabaseError:
+        raise sqlcipher3.DatabaseError("Failed to open the database.")
+
+    # Export a decrypted copy of the database
+    if not args.skip_database:
+        unencrypted_db_path = args.output / "db.sqlite"
+        udb_name = generate_db_name()
+        cursor.execute(f"ATTACH DATABASE '{unencrypted_db_path}' AS {udb_name} KEY '';")
+        cursor.execute(f"SELECT sqlcipher_export('{udb_name}');")
+        cursor.execute(f"DETACH DATABASE {udb_name};")
+        log(f"[i] Exported the unencryted database")
+
+    return conn, cursor
+
+
 ####################### MISC HELPER FUNCTIONS #######################
+
+
+def generate_db_name(length=8, prefix="signal"):
+    return f"{prefix}_".join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 
 def bytes_to_hex(data: bytes):
@@ -465,6 +516,8 @@ def log(message: str, level: int = 0):
 
 
 def main():
+    # TODO: Header with version and config output
+
     # Parse and validate arguments
     args = parse_args()
     validate_args(args)
@@ -479,27 +532,34 @@ def main():
 
     # Fetch the decryption key
     if args.mode == "key":
-        log("Fetching decryption key...", 1)
+        log("[i] Fetching decryption key...", 1)
         decryption_key = fetch_key_from_args(args)
         log(f"> Decryption Key: {bytes_to_hex(decryption_key)}", 2)
-        log("[i] Loaded decryption key")
+        log("[i] Decryption key loaded", 1)
     else:
-        log("[i] Fetching auxiliary key...")
+        log("[i] Fetching auxiliary key...", 1)
         aux_key = fetch_aux_key(args)
         if not aux_key or len(aux_key) != 32:
             raise MalformedKeyError("The auxiliary key is not 32 bytes long.")
         log(f"> Auxiliary Key: {bytes_to_hex(aux_key)}", 2)
-        log("[i] Loaded auxiliary key")
+        log("[i] Auxiliary key loaded", 1)
 
-        log("[i] Decrypting the decryption key...")
+        log("[i] Decrypting the decryption key...", 1)
         decryption_key = fetch_decryption_key(args, aux_key)
         log(f"[i] SQLCipher Key: {bytes_to_hex(decryption_key)}")
 
-    # Skip decryption if requested
-    if args.skip_decryption:
+    # Skip all decryption if requested
+    if args.no_decryption:
         return
 
-    # Decrypt the database
+    # Decrypt and process the SQLCipher database
+    log("[i] Decrypting the SQLCipher database...", 1)
+    db_conn, db_cursor = open_sqlcipher_db(args, decryption_key)
+
+    # Close the database connection
+    db_cursor.close()
+    db_conn.close()
+
     return
 
 
