@@ -17,6 +17,8 @@ VERSION = "1.0"
 
 AUX_KEY_PREFIX = "DPAPI"
 
+DEC_KEY_PREFIX = "v10"
+
 DPAPI_BLOB_GUID = uuid.UUID("df9d8cd0-1501-11d1-8c7a-00c04fc297eb")
 
 
@@ -239,6 +241,10 @@ def validate_args(args: argparse.Namespace):
         elif not args.key:
             raise ValueError("A key is required for Key Provided modes.")
 
+    # If mode is Key Provided and skip decryption is enabled, raise an error
+    if args.mode == "key" and args.skip_decryption:
+        raise ValueError("Decryption cannot be skipped when providing the decryption key.")
+
 
 class MalformedInputFileError(Exception):
     """Exception raised for a malformed input file."""
@@ -253,6 +259,7 @@ class MalformedKeyError(Exception):
 
 
 def unprotect_with_dpapi(data: bytes):
+    log("Unprotecting the auxiliary key through DPAPI...", 1)
     try:
         _, decrypted_data = win32crypt.CryptUnprotectData(data)
         return decrypted_data
@@ -334,14 +341,19 @@ def unprotect_manually(data: bytes, sid: str, password: str):
         raise MalformedKeyError("Failed to unprotect the auxiliary key manually.") from e
 
 
+def fetch_key_from_args(args: argparse.Namespace):
+    # If a key file is provided, read the key from the file
+    if args.key_file:
+        log("Reading the key from the file...", 2)
+        with args.key_file.open("r") as f:
+            return bytes.fromhex(f.read().strip())
+    return args.key
+
+
 def fetch_aux_key(args: argparse.Namespace):
     # If the user provided the auxiliary key, return it
     if args.mode == "aux":
-        # If a key file is provided, read the key from the file
-        if args.key_file:
-            with args.key_file.open("r") as f:
-                return bytes.fromhex(f.read().strip())
-        return args.key
+        return fetch_key_from_args(args)
     else:
         with args.local_state.open("r") as f:
             try:
@@ -375,6 +387,47 @@ def fetch_aux_key(args: argparse.Namespace):
     return None
 
 
+def fetch_decryption_key(args: argparse.Namespace, aux_key: bytes):
+    with args.config.open("r") as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError:
+            raise MalformedInputFileError("The Configuration file was malformed: Invalid JSON structure.")
+
+        # Validate the presence of "encryptedKey"
+        encrypted_key = data.get("encryptedKey")
+        if not encrypted_key:
+            raise MalformedInputFileError("The Configuration file was malformed: Missing the encrypted decryption key.")
+
+        # Import the hex string into bytes
+        try:
+            key = bytes.fromhex(encrypted_key)
+        except ValueError:
+            raise MalformedKeyError("The encrypted decryption key is not a valid HEX string.")
+
+        # Check if the key has the expected prefix
+        if key[: len(DEC_KEY_PREFIX)] != DEC_KEY_PREFIX.encode("utf-8"):
+            raise MalformedKeyError("The encrypted decryption key does not start with the expected prefix.")
+        key = key[len(DEC_KEY_PREFIX) :]
+
+        log("Processing the encrypted decryption key...", 2)
+
+        nonce = key[:12]  # Nonce is in the first 12 bytes
+        gcm_tag = key[-16:]  # GCM tag is in the last 16 bytes
+        key = key[12:-16]
+
+        log(f"> Nonce: {bytes_to_hex(nonce)}", 3)
+        log(f"> GCM Tag: {bytes_to_hex(gcm_tag)}", 3)
+        log(f"> Key: {bytes_to_hex(key)}", 3)
+
+        log("Decrypting the decryption key...", 2)
+        decrypted_key = aes_256_gcm_decrypt(aux_key, nonce, key, gcm_tag)
+
+        return bytes.fromhex(decrypted_key.decode("utf-8"))
+
+    return None
+
+
 def bytes_to_hex(data: bytes):
     return "".join(f"{b:02x}" for b in data)
 
@@ -397,11 +450,28 @@ def main():
     quiet = args.quiet
     verbose = args.verbose
 
-    if args.mode != "key":
+    #
+    decryption_key = None
+
+    if args.mode == "key":
+        log("Fetching decryption key...", 1)
+        decryption_key = fetch_key_from_args(args)
+        log(f"> Decryption Key: {bytes_to_hex(decryption_key)}", 2)
+        print("[i] Loaded decryption key")
+    else:
+        log("Fetching auxiliary key...", 1)
         aux_key = fetch_aux_key(args)
-        if aux_key:
-            print(bytes_to_hex(aux_key))
-            return
+        if len(aux_key) != 32:
+            raise MalformedKeyError("The auxiliary key is not 32 bytes long.")
+        log(f"> Auxiliary Key: {bytes_to_hex(aux_key)}", 2)
+        print("[i] Loaded auxiliary key")
+
+        print("[i] Decrypting the decryption key...")
+        decryption_key = fetch_decryption_key(args, aux_key)
+        log(f"> Decryption Key: {bytes_to_hex(decryption_key)}", 2)
+        print("[i] Loaded decryption key")
+
+        return
 
     # ....
 
