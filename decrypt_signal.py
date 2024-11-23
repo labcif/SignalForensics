@@ -120,12 +120,12 @@ def parse_args():
     parser = argparse.ArgumentParser(
         prog="SignalDecryptor",
         description="Decrypts the forensic artifacts from Signal Desktop on Windows",
-        usage="""%(prog)s [-m auto] -d <signal_dir> -o <output_dir> [OPTIONS]
-        %(prog)s -m aux -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
+        usage="""%(prog)s [-m auto] -d <signal_dir> [-o <output_dir>] [OPTIONS]
+        %(prog)s -m aux -d <signal_dir> [-o <output_dir>] [-kf <file> | -k <HEX>] [OPTIONS]
         %(prog)s -m key -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
-        %(prog)s -m manual -d <signal_dir> -o <output_dir> -wS <SID> -wP <password> [OPTIONS]
+        %(prog)s -m manual -d <signal_dir> [-o <output_dir>] -wS <SID> -wP <password> [OPTIONS]
         """,
-    )  # TODO: Better usage message
+    )
     # [-d <signal_dir> | (-c <file> -ls <file>)]
 
     # Informational arguments
@@ -327,9 +327,8 @@ def process_dpapi_blob(data: bytes):
 
 
 def process_dpapi_master_key_file(master_key_path: pathlib.Path):
-    # TODO: Better exception here
     if not master_key_path.is_file():
-        raise FileNotFoundError(f"Master Key file '{master_key_path}' does not exist or is not a file.")
+        raise FileNotFoundError(f"Master Key file '{master_key_path}' does not exist.")
     log("Reading from the master key file...", 3)
     with master_key_path.open("rb") as f:
         data = f.read()
@@ -364,8 +363,8 @@ def unprotect_manually(data: bytes, sid: str, password: str):
         hash_alg = get_hash_algorithm(hash_alg_id)
         nt_hash = hash_sha1(password.encode("utf-16le"))
         log(f"> NT Hash: {bytes_to_hex(nt_hash)}", 3)
-        mk_encryption_key = pbkdf2_derive_key(hash_alg, nt_hash, mk_salt, hash_rounds, 32)
-        log(f"> Master Key Encryption Key: {bytes_to_hex(mk_encryption_key)}", 3)
+        # mk_encryption_key = pbkdf2_derive_key(hash_alg, nt_hash, mk_salt, hash_rounds, 32)
+        # log(f"> Master Key Encryption Key: {bytes_to_hex(mk_encryption_key)}", 3)
         log("Decrypting the master key...", 2)
 
         # TODO: List requirements for manual acquisition of Aux Key?
@@ -553,12 +552,12 @@ def export_attachments(cursor, args: argparse.Namespace):
                 if "contentType" in attachment:
                     filePath += f"{mime_to_extension(attachment['contentType'])}"
 
-                attachment_path = attachments_dir / filePath
                 # Ensure the parent directory exists
+                attachment_path = attachments_dir / filePath
                 attachment_path.parent.mkdir(parents=True, exist_ok=True)
-
                 with attachment_path.open("wb") as f:
                     f.write(attachment_data)
+
                 counts += 1
             except Exception as e:
                 error += 1
