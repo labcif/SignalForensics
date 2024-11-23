@@ -523,6 +523,7 @@ def export_attachments(cursor, args: argparse.Namespace):
     log("[i] Processing metadata and decrypting attachments...", 2)
     counts = 0
     error = 0
+    integrity_error = 0
     for entry in messages:
         # Parse the message metadata
         attachments = json.loads(entry[0])["attachments"]
@@ -534,6 +535,7 @@ def export_attachments(cursor, args: argparse.Namespace):
                 # Fetch attachment crypto data
                 key = base64.b64decode(attachment["localKey"])[:32]
                 nonce = base64.b64decode(attachment["iv"])
+                size = int(attachment["size"])
 
                 # Fetch attachment cipherdata
                 enc_attachment_path = args.dir / "attachments.noindex" / subpath
@@ -542,10 +544,10 @@ def export_attachments(cursor, args: argparse.Namespace):
 
                 # Decrypt the attachment
                 attachment_data = aes_256_cbc_decrypt(key, nonce, enc_attachment_data)
-                attachment_data = attachment_data[16:]  # Dismiss the first 16 bytes
-
-                # REVIEW: Need to check if padding is an issue...
-                # TODO: Check HMAC?
+                attachment_data = attachment_data[16 : 16 + size]  # Dismiss the first 16 bytes and the padding
+                if bytes.fromhex(attachment["plaintextHash"]) != hash_sha256(attachment_data):
+                    log(f"[!] Attachment {subpath} failed integrity check", 2)
+                    integrity_error += 1
 
                 # Save the attachment to a file
                 filePath = subpath
@@ -564,6 +566,8 @@ def export_attachments(cursor, args: argparse.Namespace):
                 log(f"[!] Failed to export attachment {subpath}: {e}", 3)
 
     log(f"[i] Exported {counts} attachments")
+    if integrity_error > 0:
+        log(f"[!] {integrity_error} attachments failed integrity check")
     if error > 0:
         log(f"[!] Failed to export {error} attachments")
 
