@@ -167,7 +167,7 @@ def parse_args():
         "-m",
         "--mode",
         help=(
-            "Mode of operation (choices: 'auto' for Windows Auto, 'aux' for Auxiliary Key Provided, "
+            "Mode of execution (choices: 'auto' for Windows Automatic, 'aux' for Auxiliary Key Provided, "
             "'key' for Decryption Key Provided), 'manual' for Windows Manual. "
             "Short aliases: -mA (Auto), -mAK (Auxiliary Key), -mDK (Decryption Key), -mM (Manual)"
             "Default: auto"
@@ -537,8 +537,16 @@ def export_attachments(cursor, args: argparse.Namespace):
                 nonce = base64.b64decode(attachment["iv"])
                 size = int(attachment["size"])
 
-                # Fetch attachment cipherdata
+                # Encrypted attachment path
                 enc_attachment_path = args.dir / "attachments.noindex" / subpath
+
+                # Check if the encrypted attachment is present on the expected path
+                if not enc_attachment_path.is_file():
+                    log(f"[!] Attachment {subpath} not found", 2)
+                    error += 1
+                    continue
+
+                # Fetch attachment cipherdata
                 with enc_attachment_path.open("rb") as f:
                     enc_attachment_data = f.read()
 
