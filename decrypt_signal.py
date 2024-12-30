@@ -4,24 +4,16 @@ import os
 import json
 import base64
 import uuid
-import struct
 import random
 import string
 import mimetypes
 import sys
 
-# from Crypto.Hash import MD4
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives.hashes import Hash, SHA256, SHA512, SHA1
-
 import sqlcipher3
 
-
 from modules import shared_utils as su
-
-log = su.log
+from modules.shared_utils import bytes_to_hex, log, MalformedKeyError
+from modules.crypto import aes_256_gcm_decrypt, aes_256_cbc_decrypt, hash_sha256
 
 ####################### CONSTANTS #######################
 VERSION = "1.0"
@@ -39,82 +31,6 @@ class MalformedInputFileError(Exception):
     """Exception raised for a malformed input file."""
 
     pass
-
-
-class MalformedKeyError(Exception):
-    """Exception raised for a malformed key."""
-
-    pass
-
-
-####################### Cryptography #######################
-
-
-# AES-256-GCM decryption
-def aes_256_gcm_decrypt(key, nonce, ciphertext, tag):
-    decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce, tag), backend=default_backend()).decryptor()
-    return decryptor.update(ciphertext) + decryptor.finalize()
-
-
-# AES-256-CBC encryption
-def aes_256_cbc_decrypt(key, nonce, ciphertext):
-    decryptor = Cipher(algorithms.AES(key), modes.CBC(nonce), backend=default_backend()).decryptor()
-    return decryptor.update(ciphertext) + decryptor.finalize()
-
-
-# PBKDF2 key derivation
-def pbkdf2_derive_key(algorithm, password, salt, iterations, key_length):
-    kdf = PBKDF2HMAC(
-        algorithm=algorithm, length=key_length, salt=salt, iterations=iterations, backend=default_backend()
-    )
-    return kdf.derive(password)
-
-
-# Hashing algorithm
-def hash_algorithm(data, algorithm, rounds=1):
-    for _ in range(rounds):
-        digest = Hash(algorithm, backend=default_backend())
-        digest.update(data)
-        data = digest.finalize()
-    return data
-
-
-# SHA-256 hash
-def hash_sha256(data, rounds=1):
-    return hash_algorithm(data, SHA256(), rounds)
-
-
-# SHA-512 hash
-def hash_sha512(data, rounds=1):
-    return hash_algorithm(data, SHA512(), rounds)
-
-
-# SHA-1 hash
-def hash_sha1(data, rounds=1):
-    return hash_algorithm(data, SHA1(), rounds)
-
-
-# MD4 hash
-# def hash_md4(data):
-#    return MD4.new(data).digest()
-
-
-# def hash_from_alg_id(data, alg_id, rounds=1):
-#    if alg_id == 32780:
-#        return hash_sha256(data, rounds)
-#    elif alg_id == 32782:
-#        return hash_sha512(data, rounds)
-#    else:
-#        raise ValueError(f"Unsupported hash algorithm ID: {alg_id}")
-
-
-def get_hash_algorithm(alg_id):
-    if alg_id == 32780:
-        return SHA256()
-    elif alg_id == 32782:
-        return SHA512()
-    else:
-        raise ValueError(f"Unsupported hash algorithm ID: {alg_id}")
 
 
 ####################### I/O ARGS #######################
@@ -296,82 +212,6 @@ def validate_args(args: argparse.Namespace):
         raise ValueError("Decryption cannot be skipped when providing the decryption key.")
 
 
-####################### MANUAL MODE FUNCTIONS #######################
-
-
-def process_dpapi_blob(data: bytes):
-    try:
-        log("Extracting data from DPAPI BLOB...", 2)
-        master_key_guid = str(uuid.UUID(bytes_le=data[24:40]))
-        log(f"> Master Key GUID: {master_key_guid}", 3)
-        desc_len = struct.unpack("<I", data[44:48])[0]
-        idx = 48 + desc_len + 8
-        salt_len = struct.unpack("<I", data[idx : idx + 4])[0]
-        idx += 4
-        salt = data[idx : idx + salt_len]
-        log(f"> BLOB Salt: {bytes_to_hex(salt)}", 3)
-        idx += salt_len
-        hmac_key_len = struct.unpack("<I", data[idx : idx + 4])[0]
-        idx += 4 + hmac_key_len + 8
-        hmac_key_len = struct.unpack("<I", data[idx : idx + 4])[0]
-        idx += 4 + hmac_key_len
-        data_len = struct.unpack("<I", data[idx : idx + 4])[0]
-        idx += 4
-        cipher_data = data[idx : idx + data_len]
-        log(f"> Cipher Data: {bytes_to_hex(cipher_data)}", 3)
-        return master_key_guid, salt, cipher_data
-    except Exception as e:
-        raise MalformedKeyError("Failed to extract information from the auxiliary key blob.") from e
-
-
-def process_dpapi_master_key_file(master_key_path: pathlib.Path):
-    if not master_key_path.is_file():
-        raise FileNotFoundError(f"Master Key file '{master_key_path}' does not exist.")
-    log("Reading from the master key file...", 3)
-    with master_key_path.open("rb") as f:
-        data = f.read()
-    log("Processing the master key file...", 2)
-
-    idx = 96
-    master_key_len = struct.unpack("<Q", data[idx : idx + 8])[0]
-    idx += 8 + 24 + 4
-    salt = data[idx : idx + 16]
-    log(f"> Master Key Salt: {bytes_to_hex(salt)}", 3)
-    idx += 16
-    rounds = struct.unpack("<I", data[idx : idx + 4])[0]
-    log(f"> Rounds: {rounds}", 3)
-    idx += 4
-    hash_alg_id = struct.unpack("<I", data[idx : idx + 4])[0]
-    log(f"> Algorithm Hash ID: {hash_alg_id}", 3)
-    idx += 4 + 4
-    encrypted_master_key = data[idx : idx + master_key_len - 32]
-    log(f"> Encrypted Master Key: {bytes_to_hex(encrypted_master_key)}", 3)
-    return salt, rounds, hash_alg_id, master_key_len, encrypted_master_key
-
-
-def unprotect_manually(data: bytes, sid: str, password: str):
-    try:
-        log("[i] Unprotecting the auxiliary key manually...", 1)
-        master_key_guid, blob_salt, cipher_data = process_dpapi_blob(data)
-        log("Crafting the master key path...", 2)
-        master_key_path = pathlib.Path(os.getenv("APPDATA")) / "Microsoft" / "Protect" / sid / master_key_guid
-        log(f"> Master Key Path: {master_key_path}", 3)
-        mk_salt, hash_rounds, hash_alg_id, mk_len, encrypted_master_key = process_dpapi_master_key_file(master_key_path)
-        log("Deriving the master key's encription key...", 2)
-        hash_alg = get_hash_algorithm(hash_alg_id)
-        nt_hash = hash_sha1(password.encode("utf-16le"))
-        log(f"> NT Hash: {bytes_to_hex(nt_hash)}", 3)
-        # mk_encryption_key = pbkdf2_derive_key(hash_alg, nt_hash, mk_salt, hash_rounds, 32)
-        # log(f"> Master Key Encryption Key: {bytes_to_hex(mk_encryption_key)}", 3)
-        log("Decrypting the master key...", 2)
-
-        # TODO: List requirements for manual acquisition of Aux Key?
-
-        raise NotImplementedError("Manual mode is not implemented yet.")
-    except Exception as e:
-        raise MalformedKeyError("Failed to unprotect the auxiliary key manually.") from e
-
-
 ####################### KEY FETCHING #######################
 
 
@@ -421,7 +261,9 @@ def fetch_aux_key(args: argparse.Namespace):
                     raise ImportError("Windows-specific module could not be imported:", e)
                 return win.unprotect_with_dpapi(encrypted_key)
             elif args.mode == "manual":
-                return unprotect_manually(encrypted_key, args.windows_sid, args.windows_password)
+                from modules import manual as manual_mode  # REVIEW: Should this be imported here or at the top?
+
+                return manual_mode.unprotect_manually(encrypted_key, args.windows_sid, args.windows_password)
     return None
 
 
@@ -587,10 +429,6 @@ def export_attachments(cursor, args: argparse.Namespace):
 
 def generate_db_name(length=8, prefix="signal"):
     return f"{prefix}_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=length))
-
-
-def bytes_to_hex(data: bytes):
-    return "".join(f"{b:02x}" for b in data)
 
 
 def mime_to_extension(mime_type):
