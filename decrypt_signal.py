@@ -3,12 +3,12 @@ import pathlib
 import os
 import json
 import base64
-import win32crypt  # TODO: Separate DPAPI from the rest of the script
 import uuid
 import struct
 import random
 import string
 import mimetypes
+import sys
 
 # from Crypto.Hash import MD4
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -17,6 +17,11 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.hashes import Hash, SHA256, SHA512, SHA1
 
 import sqlcipher3
+
+
+from modules import shared_utils as su
+
+log = su.log
 
 ####################### CONSTANTS #######################
 VERSION = "1.0"
@@ -266,6 +271,11 @@ def validate_args(args: argparse.Namespace):
         except OSError as e:
             raise FileNotFoundError(f"Output directory '{args.output}' does not exist and could not be created.") from e
 
+    # Validate auto mode
+    if args.mode == "auto":
+        if not sys.platform.startswith("win"):
+            raise OSError("Automatic mode is only available on Windows.")
+
     # Validate manual mode arguments
     if args.mode == "manual":
         if not args.windows_sid:
@@ -284,18 +294,6 @@ def validate_args(args: argparse.Namespace):
     # If mode is Key Provided and skip decryption is enabled, raise an error
     if args.mode == "key" and args.skip_decryption:
         raise ValueError("Decryption cannot be skipped when providing the decryption key.")
-
-
-####################### DPAPI #######################
-
-
-def unprotect_with_dpapi(data: bytes):
-    log("[i] Unprotecting the auxiliary key through DPAPI...", 1)
-    try:
-        _, decrypted_data = win32crypt.CryptUnprotectData(data)
-        return decrypted_data
-    except Exception as e:
-        raise ValueError("Failed to unprotect the auxiliary key with DPAPI.") from e
 
 
 ####################### MANUAL MODE FUNCTIONS #######################
@@ -417,7 +415,11 @@ def fetch_aux_key(args: argparse.Namespace):
                 raise MalformedKeyError("The encrypted auxiliary key is not in the expected DPAPI BLOB format.")
 
             if args.mode == "auto":
-                return unprotect_with_dpapi(encrypted_key)
+                try:
+                    from modules import windows as win
+                except ImportError as e:
+                    raise ImportError("Windows-specific module could not be imported:", e)
+                return win.unprotect_with_dpapi(encrypted_key)
             elif args.mode == "manual":
                 return unprotect_manually(encrypted_key, args.windows_sid, args.windows_password)
     return None
@@ -596,15 +598,6 @@ def mime_to_extension(mime_type):
     return extension
 
 
-quiet = False
-verbose = 0
-
-
-def log(message: str, level: int = 0):
-    if not quiet and (verbose >= level):
-        print(message)
-
-
 ####################### MAIN FUNCTION #######################
 
 
@@ -616,9 +609,8 @@ def main():
     validate_args(args)
 
     # Setup logging
-    global quiet, verbose
-    quiet = args.quiet
-    verbose = args.verbose
+    su.quiet = args.quiet
+    su.verbose = args.verbose
 
     # Initialize decryption key
     decryption_key = None
