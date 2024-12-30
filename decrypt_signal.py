@@ -327,7 +327,7 @@ def open_sqlcipher_db(args: argparse.Namespace, key: bytes):
 
     # Test if the decryption key is correct
     try:
-        log("Testing the decryption key...", 2)
+        log("Trying SQLCipher key...", 2)
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
     except sqlcipher3.DatabaseError:
         raise sqlcipher3.DatabaseError("Failed to open the database.")
@@ -436,15 +436,27 @@ def mime_to_extension(mime_type):
     return extension
 
 
+####################### HEADER #######################
+def print_config(args: argparse.Namespace):
+    log("----------------------==<[ CONFIG ]>==----------------------")
+    log(f"Mode: {args.mode}")
+    log(f"Signal Directory: {args.dir}")
+    if args.output:
+        log(f"Output Directory: {args.output}")
+    log("------------------------------------------------------------")
+
+
 ####################### MAIN FUNCTION #######################
 
 
 def main():
-    # TODO: Header with version and config output
+    log(f"SignalDecryptor v{VERSION} by @gonssalu")
 
     # Parse and validate arguments
     args = parse_args()
     validate_args(args)
+
+    print_config(args)
 
     # Setup logging
     su.quiet = args.quiet

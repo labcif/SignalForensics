@@ -6,7 +6,7 @@ include = '\.pyi?$'
 name = "wyoming"
 version = "1.0.0"
 description = ""
-authors = ["Your Name <you@example.com>"]
+authors = ["Your Name <gonssalu@proton.me>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
