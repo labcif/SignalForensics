@@ -370,7 +370,12 @@ def export_attachments(cursor, args: argparse.Namespace):
     integrity_error = 0
     for entry in messages:
         # Parse the message metadata
-        attachments = json.loads(entry[0])["attachments"]
+        msgJson = json.loads(entry[0])
+        attachments = msgJson["attachments"]
+
+        # Preview of embed urls
+        if "preview" in msgJson and "image" in msgJson["preview"]:
+            attachments.append(msgJson["preview"]["image"])
 
         # For each attachment in the message
         for attachment in attachments:
