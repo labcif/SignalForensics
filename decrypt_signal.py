@@ -8,6 +8,7 @@ import random
 import string
 import mimetypes
 import sys
+import csv
 
 import sqlcipher3
 
@@ -143,8 +144,11 @@ def parse_args():
     parser.add_argument(
         "-nd", "--no-decryption", help="No decription, just print the SQLCipher key", action="store_true"
     )
-    parser.add_argument("-sD", "--skip-database", help="Skip unencrypted database exportation", action="store_true")
+    parser.add_argument(
+        "-sD", "--skip-database", help="Skip exporting a decrypted copy of the database", action="store_true"
+    )
     parser.add_argument("-sA", "--skip-attachments", help="Skip attachment decryption", action="store_true")
+    parser.add_argument("-sR", "--skip-reports", help="Skip the generation of CSV reports", action="store_true")
     # parser.add_argument(
     #    "-iM", "--include-metadata", help="Print user metadata from Signal database", action="store_true"
     # )
@@ -347,10 +351,148 @@ def open_sqlcipher_db(args: argparse.Namespace, key: bytes):
     return conn, cursor
 
 
-def export_attachments(cursor, args: argparse.Namespace):
-    attachments_dir = args.output / "attachments"
-    attachments_dir.mkdir(parents=True, exist_ok=True)
+def write_csv_file(path, headers, rows):
+    try:
+        with open(path, "w", newline="") as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=headers)
 
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+    except Exception as e:
+        log(f"[!] Failed to write CSV file: {e}")
+        return False
+    return True
+
+
+# Print mentions in the message
+def print_mentions_in_message(text, bodyRanges):
+    if bodyRanges is None or text is None or type(bodyRanges) is not list or bodyRanges == []:
+        return text
+    newText = ""
+    j = 0
+    for i in range(len(bodyRanges)):
+        mention = bodyRanges[i]
+        # Text before the mentio
+        newText += text[j : mention["start"]]
+        j += mention["start"] + mention["length"]  # Skip the mention's representation
+        newText += mention["replacementText"]
+    return newText
+
+
+def process_messages(cursor, args: argparse.Namespace):
+    log("[i] Fetching all conversations...", 2)
+    try:
+        cursor.execute("SELECT id, json, type, active_at, serviceId, profileFullName, e164 FROM conversations;")
+        conversations = cursor.fetchall()
+    except sqlcipher3.DatabaseError as e:
+        raise sqlcipher3.DatabaseError("Failed to fetch conversations.") from e
+
+    log(f"[i] Found {len(conversations)} conversations", 1)
+
+    if len(conversations) == 0:
+        log("[i] No conversations were found in the database")
+        return
+
+    # Create CSV headers and row arrays
+    conv_headers = [
+        "ID",
+        "Type",
+        "Name",
+        "Last Active At",
+        "Unread Messages",
+        "Total Message Count",
+        "Sent Message Count",
+        "Last Message Author",
+        "Last Message",
+        "Last Message Deleted For Everyone",
+        "Draft Message",
+    ]
+    contacts_headers = ["Conversation ID", "Name", "E164", "Profile Name", "Service ID"]
+    group_members_headers = ["Conversation ID", "Name", "Group ID", "Type", "Member Service ID", "Member Name", "Role"]
+    conv_rows = []
+    contacts_rows = []
+    group_members_rows = []
+
+    service2name = {}  # Dictionary of service ID to contact name
+
+    def match_service_id(serviceId):
+        if serviceId in service2name:
+            return service2name[serviceId]
+        return None
+
+    # Process the last message with prefix and mentions.
+    def process_last_message(convJson):
+        last_message = print_mentions_in_message(
+            convJson.get("lastMessage", None), convJson.get("lastMessageBodyRanges", None)
+        )
+        prefix = convJson.get("lastMessagePrefix", "")
+        if prefix:
+            last_message = f"{prefix} {last_message}"
+        return last_message
+
+    # Process group members and add to group_members_rows.
+    def process_group_members(convId, convJson, group_members_rows):
+        # TODO: """Process group members and add to group_members_rows."""
+        MEMBER_KEYS = {
+            "membersV2": "Member",
+            "pendingMembersV2": "Pending Member",
+            "pendingAdminApprovalV2": "Pending Admin Approval",
+            "bannedMembersV2": "Banned Member",
+        }
+        for mbrKey, memberType in MEMBER_KEYS.items():
+            if mbrKey not in convJson:
+                continue
+            for member in convJson[mbrKey]:
+                mbrServiceId = member["aci"]
+                role = "Administrator" if member.get("role", None) == 2 else None
+                group_members_rows.append(
+                    [
+                        convId,
+                        convJson.get("name", ""),
+                        convJson.get("groupId", None),
+                        memberType,
+                        mbrServiceId,
+                        match_service_id(mbrServiceId),
+                        role,
+                    ]
+                )
+
+    # Main loop for conversations
+    for conv in conversations:
+        convId, convJsonStr, convType, convActiveAt, serviceId = conv[:5]
+        convJson = json.loads(convJsonStr)
+        convLastMsg = process_last_message(convJson)
+        convDraft = print_mentions_in_message(convJson.get("draft", None), convJson.get("draftBodyRanges", None))
+
+        if convType == "private":
+            service2name[serviceId] = convJson.get("name", "")
+            contacts_rows.append([convId, convJson.get("name", ""), conv[6], conv[5], serviceId])
+        elif convType == "group":
+            process_group_members(convId, convJson, group_members_rows)
+
+        # Append the conversation data to the CSV rows
+        conv_rows.append(
+            [
+                convId,
+                convType,
+                convJson.get("name", ""),
+                convActiveAt,
+                convJson.get("unreadCount", 0),
+                convJson.get("messageCount", 0),
+                convJson.get("sentMessageCount", 0),
+                convJson.get("lastMessageAuthor", None),
+                convLastMsg,
+                convJson.get("lastMessageDeletedForEveryone", None),
+                convDraft,
+            ]
+        )
+
+    if args.skip_reports:
+        exit
+
+
+def a(cursor, args: argparse.Namespace):
     # Fetch all attachment data
     log("[i] Fetching attachment metadata...", 2)
     try:
@@ -363,11 +505,6 @@ def export_attachments(cursor, args: argparse.Namespace):
         log("[i] No attachments were found in the database")
         return
 
-    # Process each attachment
-    log("[i] Processing metadata and decrypting attachments...", 2)
-    counts = 0
-    error = 0
-    integrity_error = 0
     for entry in messages:
         # Parse the message metadata
         msgJson = json.loads(entry[0])
@@ -377,50 +514,63 @@ def export_attachments(cursor, args: argparse.Namespace):
         if "preview" in msgJson and "image" in msgJson["preview"]:
             attachments.append(msgJson["preview"]["image"])
 
-        # For each attachment in the message
         for attachment in attachments:
-            subpath = attachment["path"]
-            try:
-                # Fetch attachment crypto data
-                key = base64.b64decode(attachment["localKey"])[:32]
-                nonce = base64.b64decode(attachment["iv"])
-                size = int(attachment["size"])
+            log(attachment, 2)
 
-                # Encrypted attachment path
-                enc_attachment_path = args.dir / "attachments.noindex" / subpath
 
-                # Check if the encrypted attachment is present on the expected path
-                if not enc_attachment_path.is_file():
-                    log(f"[!] Attachment {subpath} not found", 2)
-                    error += 1
-                    continue
+def export_attachments(attachments, args: argparse.Namespace):
+    attachments_dir = args.output / "attachments"
+    attachments_dir.mkdir(parents=True, exist_ok=True)
 
-                # Fetch attachment cipherdata
-                with enc_attachment_path.open("rb") as f:
-                    enc_attachment_data = f.read()
+    # Process each attachment
+    log("[i] Processing metadata and decrypting attachments...", 2)
+    counts = 0
+    error = 0
+    integrity_error = 0
 
-                # Decrypt the attachment
-                attachment_data = aes_256_cbc_decrypt(key, nonce, enc_attachment_data)
-                attachment_data = attachment_data[16 : 16 + size]  # Dismiss the first 16 bytes and the padding
-                if bytes.fromhex(attachment["plaintextHash"]) != hash_sha256(attachment_data):
-                    log(f"[!] Attachment {subpath} failed integrity check", 2)
-                    integrity_error += 1
+    for attachment in attachments:
+        subpath = attachment["path"]
+        try:
+            # Fetch attachment crypto data
+            key = base64.b64decode(attachment["localKey"])[:32]
+            nonce = base64.b64decode(attachment["iv"])
+            size = int(attachment["size"])
 
-                # Save the attachment to a file
-                filePath = subpath
-                if "contentType" in attachment:
-                    filePath += f"{mime_to_extension(attachment['contentType'])}"
+            # Encrypted attachment path
+            enc_attachment_path = args.dir / "attachments.noindex" / subpath
 
-                # Ensure the parent directory exists
-                attachment_path = attachments_dir / filePath
-                attachment_path.parent.mkdir(parents=True, exist_ok=True)
-                with attachment_path.open("wb") as f:
-                    f.write(attachment_data)
-
-                counts += 1
-            except Exception as e:
+            # Check if the encrypted attachment is present on the expected path
+            if not enc_attachment_path.is_file():
+                log(f"[!] Attachment {subpath} not found", 2)
                 error += 1
-                log(f"[!] Failed to export attachment {subpath}: {e}", 3)
+                continue
+
+            # Fetch attachment cipherdata
+            with enc_attachment_path.open("rb") as f:
+                enc_attachment_data = f.read()
+
+            # Decrypt the attachment
+            attachment_data = aes_256_cbc_decrypt(key, nonce, enc_attachment_data)
+            attachment_data = attachment_data[16 : 16 + size]  # Dismiss the first 16 bytes and the padding
+            if bytes.fromhex(attachment["plaintextHash"]) != hash_sha256(attachment_data):
+                log(f"[!] Attachment {subpath} failed integrity check", 2)
+                integrity_error += 1
+
+            # Save the attachment to a file
+            filePath = subpath
+            if "contentType" in attachment:
+                filePath += f"{mime_to_extension(attachment['contentType'])}"
+
+            # Ensure the parent directory exists
+            attachment_path = attachments_dir / filePath
+            attachment_path.parent.mkdir(parents=True, exist_ok=True)
+            with attachment_path.open("wb") as f:
+                f.write(attachment_data)
+
+            counts += 1
+        except Exception as e:
+            error += 1
+            log(f"[!] Failed to export attachment {subpath}: {e}", 3)
 
     log(f"[i] Exported {counts} attachments")
     if integrity_error > 0:
