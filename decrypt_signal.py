@@ -601,9 +601,8 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
 
             # Message expiration handling
             expiresTimer = msgJson.get("expiresTimer", None)
-            if expiresTimer is None:
-                msgExpiresAt = None
-            else:
+            msgExpiresAt = None
+            if expiresTimer is not None:
                 msgExpiresAt = msgJson.get("expirationStartTimestamp", None) + (expiresTimer * 1000)
 
             # Message body handling
@@ -646,6 +645,9 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                             msgStatus = "..."  # NOTE: Explain this
                             break
 
+            hasReactions = len(msgJson.get("reactions", [])) > 0
+            hasEditHistory = len(msgJson.get("editHistory", [])) > 0
+
             messages_rows.append(
                 msgId,
                 msgType,
@@ -659,8 +661,10 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 hasAttachments or hasFileAttachments,
                 msgJson.get("isViewOnce", False),
                 msgJson.get("isErased", False),
-                msgStatus
+                msgStatus,
                 msgExpiresAt,
+                hasEditHistory,
+                hasReactions,
                 msgAuthorServiceId,
                 msgJson.get("sourceDevice", None),
             )
