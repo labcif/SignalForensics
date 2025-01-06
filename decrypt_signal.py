@@ -380,22 +380,49 @@ def print_mentions_in_message(text, bodyRanges):
     return newText
 
 
-def process_messages(cursor, args: argparse.Namespace):
-    log("[i] Fetching all conversations...", 2)
+def select_sql(cursor, statement, name=None):
+    if name is not None:
+        log(f"[i] Fetching all {name}...", 2)
     try:
-        cursor.execute("SELECT id, json, type, active_at, serviceId, profileFullName, e164 FROM conversations;")
-        conversations = cursor.fetchall()
+        cursor.execute(statement)
+        arr = cursor.fetchall()
+        if name is not None:
+            log(f"[i] Found {len(arr)} {name}", 1)
+        return arr
     except sqlcipher3.DatabaseError as e:
-        raise sqlcipher3.DatabaseError("Failed to fetch conversations.") from e
+        raise sqlcipher3.DatabaseError("Failed to execute SQL SELECT (", statement, ")") from e
 
-    log(f"[i] Found {len(conversations)} conversations", 1)
+
+def fetch_batches_select(cursor, statement, batch_size=10000):
+    offset = 0
+    while True:
+        query = f"{statement} LIMIT {batch_size} OFFSET {offset}"
+        cursor.execute(query)
+        rows = cursor.fetchall()
+
+        yield rows
+        offset += batch_size
+
+        # If the number of rows fetched is less than the batch size, stop fetching
+        if len(rows) < batch_size:
+            break
+
+
+def process_database_and_write_reports(cursor, args: argparse.Namespace):
+
+    log("[i] Processing the database...", 1)
+    conversations = select_sql(
+        cursor,
+        "SELECT id, json, type, active_at, serviceId, profileFullName, e164 FROM conversations;",
+        "conversations",
+    )
 
     if len(conversations) == 0:
         log("[i] No conversations were found in the database")
         return
 
     # Create CSV headers and row arrays
-    conv_headers = [
+    CONVERSATIONS_HEADERS = [
         "ID",
         "Type",
         "Name",
@@ -407,17 +434,30 @@ def process_messages(cursor, args: argparse.Namespace):
         "Last Message",
         "Last Message Deleted For Everyone",
         "Draft Message",
+        "Expire Timer (seconds)",
+        "Is Archived?",
+        "Added By",
     ]
-    contacts_headers = ["Conversation ID", "Name", "E164", "Profile Name", "Service ID"]
-    group_members_headers = ["Conversation ID", "Name", "Group ID", "Type", "Member Service ID", "Member Name", "Role"]
+    CONTACTS_HEADERS = ["Conversation ID", "Name", "E164", "Profile Name", "Service ID"]
+    GROUPS_MEMBERS_HEADERS = [
+        "Conversation ID",
+        "Name",
+        "Group ID",
+        "Type",
+        "Member Service ID",
+        "Member Name",
+        "Role",
+    ]
     conv_rows = []
     contacts_rows = []
     group_members_rows = []
 
     service2name = {}  # Dictionary of service ID to contact name
+    conv2service = {}  # Dictionary of conversation ID to service ID
+    convId2conv = {}  # Dictionary of conversation ID to conversation name
 
     def match_service_id(serviceId):
-        if serviceId in service2name:
+        if serviceId is not None and serviceId in service2name:
             return service2name[serviceId]
         return None
 
@@ -453,12 +493,20 @@ def process_messages(cursor, args: argparse.Namespace):
                         convJson.get("groupId", None),
                         memberType,
                         mbrServiceId,
-                        match_service_id(mbrServiceId),
+                        service2name.get(mbrServiceId, None),
                         role,
                     ]
                 )
 
-    # Main loop for conversations
+    # Populate the service2name dictionary
+    for conv in conversations:
+        convJson = json.loads(conv[1])
+        if convType == "private":
+            service2name[conv[4]] = convJson.get("name", "")
+            conv2service[conv[0]] = conv[4]
+        convId2conv[conv[0]] = {"name": convJson.get("name", ""), "type": convType}
+
+    # Process conversations table data
     for conv in conversations:
         convId, convJsonStr, convType, convActiveAt, serviceId = conv[:5]
         convJson = json.loads(convJsonStr)
@@ -466,10 +514,11 @@ def process_messages(cursor, args: argparse.Namespace):
         convDraft = print_mentions_in_message(convJson.get("draft", None), convJson.get("draftBodyRanges", None))
 
         if convType == "private":
-            service2name[serviceId] = convJson.get("name", "")
             contacts_rows.append([convId, convJson.get("name", ""), conv[6], conv[5], serviceId])
         elif convType == "group":
             process_group_members(convId, convJson, group_members_rows)
+
+        added_by = convJson.get("addedBy", None)
 
         # Append the conversation data to the CSV rows
         conv_rows.append(
@@ -485,18 +534,100 @@ def process_messages(cursor, args: argparse.Namespace):
                 convLastMsg,
                 convJson.get("lastMessageDeletedForEveryone", None),
                 convDraft,
+                convJson.get("expireTimer", None),
+                convJson.get("isArchived", False),
+                service2name.get(added_by, None),
             ]
         )
 
-    if args.skip_reports:
-        exit
+    # Write the csv files
+    if not write_csv_file(args.output / "conversations.csv", CONVERSATIONS_HEADERS, conv_rows):
+        log("[!] Failed to write the conversations CSV file")
+    if not write_csv_file(args.output / "contacts.csv", CONTACTS_HEADERS, contacts_rows):
+        log("[!] Failed to write the contacts CSV file")
+    if not write_csv_file(args.output / "groups_members.csv", GROUPS_MEMBERS_HEADERS, group_members_rows):
+        log("[!] Failed to write the groups members CSV file")
+
+    # Free memory
+    del conv_rows
+    del contacts_rows
+    del group_members_rows
+
+    MESSAGES_HEADERS = [
+        "Message ID",
+        "Type",
+        "Conversation ID",
+        "Conversation Type",
+        "Conversation Name",
+        "Sent At",
+        "Received At",
+        "Author",
+        "Message",
+        "Has Attachments?",
+        "Is View Once?",
+        "Is Erased?",
+        "Expires At",
+        "Author's Service ID",
+        "Author's Device",
+    ]
+
+    messages_rows = []
+
+    for msg_batch in fetch_batches_select(
+        cursor,
+        "SELECT id, type, conversationId, json, hasAttachments, hasFileAttachments FROM messages WHERE type IN ('outgoing','incoming','group-v2-change');",
+    ):
+        for msg in msg_batch:
+            msgId, msgType, msgConvId, msgJsonStr, hasAttachments, hasFileAttachments = msg
+            msgJson = json.loads(msgJsonStr)
+
+            msgConvType = convId2conv.get(msgConvId, {}).get("type", "")
+            msgConvName = convId2conv.get(msgConvId, {}).get("name", "")
+            msgAuthorServiceId = msgJson.get("sourceServiceId", None)
+            msgAuthor = service2name.get(msgAuthorServiceId, "")
+
+            # Message expiration handling
+            expiresTimer = msgJson.get("expiresTimer", None)
+            if expiresTimer is None:
+                msgExpiresAt = None
+            else:
+                msgExpiresAt = msgJson.get("expirationStartTimestamp", None) + (expiresTimer * 1000)
+
+            # Message body handling
+            msgBodyRanges = msgJson.get("bodyRanges", [])
+            msgBody = msgJson.get("body", None)
+            if len(msgBodyRanges) > 0:
+                msgBody = print_mentions_in_message(msgBody, msgBodyRanges)
+
+            messages_rows.append(
+                msgId,
+                msgType,
+                msgConvId,
+                msgConvType,
+                msgConvName,
+                msgJson.get("sent_at", None),
+                msgJson.get("received_at", None),
+                msgAuthor,
+                msgBody,
+                hasAttachments or hasFileAttachments,
+                msgJson.get("isViewOnce", False),
+                msgJson.get("isErased", False),
+                msgExpiresAt,
+                msgAuthorServiceId,
+                msgJson.get("sourceDevice", None),
+            )
 
 
-def a(cursor, args: argparse.Namespace):
+def export_attachments(cursor, args: argparse.Namespace):
+    attachments_dir = args.output / "attachments"
+    attachments_dir.mkdir(parents=True, exist_ok=True)
+
     # Fetch all attachment data
     log("[i] Fetching attachment metadata...", 2)
     try:
-        cursor.execute("SELECT json from messages WHERE hasFileAttachments = TRUE OR hasAttachments = TRUE;")
+        cursor.execute(
+            "SELECT json from messages WHERE hasFileAttachments = TRUE OR hasAttachments = TRUE OR json LIKE '%\"preview\":[{%';"
+        )
         messages = cursor.fetchall()
     except sqlcipher3.DatabaseError as e:
         raise sqlcipher3.DatabaseError("Failed to fetch attachment metadata.") from e
@@ -505,72 +636,64 @@ def a(cursor, args: argparse.Namespace):
         log("[i] No attachments were found in the database")
         return
 
-    for entry in messages:
-        # Parse the message metadata
-        msgJson = json.loads(entry[0])
-        attachments = msgJson["attachments"]
-
-        # Preview of embed urls
-        if "preview" in msgJson and "image" in msgJson["preview"]:
-            attachments.append(msgJson["preview"]["image"])
-
-        for attachment in attachments:
-            log(attachment, 2)
-
-
-def export_attachments(attachments, args: argparse.Namespace):
-    attachments_dir = args.output / "attachments"
-    attachments_dir.mkdir(parents=True, exist_ok=True)
-
     # Process each attachment
     log("[i] Processing metadata and decrypting attachments...", 2)
     counts = 0
     error = 0
     integrity_error = 0
+    for entry in messages:
+        # Parse the message metadata
+        msgJson = json.loads(entry[0])
+        attachments = msgJson.get("attachments", [])
 
-    for attachment in attachments:
-        subpath = attachment["path"]
-        try:
-            # Fetch attachment crypto data
-            key = base64.b64decode(attachment["localKey"])[:32]
-            nonce = base64.b64decode(attachment["iv"])
-            size = int(attachment["size"])
+        # Preview of embed urls
+        if "preview" in msgJson and "image" in msgJson["preview"]:
+            attachments.append(msgJson["preview"]["image"])
 
-            # Encrypted attachment path
-            enc_attachment_path = args.dir / "attachments.noindex" / subpath
+        # For each attachment in the message
+        for attachment in attachments:
+            subpath = attachment["path"]
+            try:
+                # Fetch attachment crypto data
+                key = base64.b64decode(attachment["localKey"])[:32]
+                nonce = base64.b64decode(attachment["iv"])
+                size = int(attachment["size"])
 
-            # Check if the encrypted attachment is present on the expected path
-            if not enc_attachment_path.is_file():
-                log(f"[!] Attachment {subpath} not found", 2)
+                # Encrypted attachment path
+                enc_attachment_path = args.dir / "attachments.noindex" / subpath
+
+                # Check if the encrypted attachment is present on the expected path
+                if not enc_attachment_path.is_file():
+                    log(f"[!] Attachment {subpath} not found", 2)
+                    error += 1
+                    continue
+
+                # Fetch attachment cipherdata
+                with enc_attachment_path.open("rb") as f:
+                    enc_attachment_data = f.read()
+
+                # Decrypt the attachment
+                attachment_data = aes_256_cbc_decrypt(key, nonce, enc_attachment_data)
+                attachment_data = attachment_data[16 : 16 + size]  # Dismiss the first 16 bytes and the padding
+                if bytes.fromhex(attachment["plaintextHash"]) != hash_sha256(attachment_data):
+                    log(f"[!] Attachment {subpath} failed integrity check", 2)
+                    integrity_error += 1
+
+                # Save the attachment to a file
+                filePath = subpath
+                if "contentType" in attachment:
+                    filePath += f"{mime_to_extension(attachment['contentType'])}"
+
+                # Ensure the parent directory exists
+                attachment_path = attachments_dir / filePath
+                attachment_path.parent.mkdir(parents=True, exist_ok=True)
+                with attachment_path.open("wb") as f:
+                    f.write(attachment_data)
+
+                counts += 1
+            except Exception as e:
                 error += 1
-                continue
-
-            # Fetch attachment cipherdata
-            with enc_attachment_path.open("rb") as f:
-                enc_attachment_data = f.read()
-
-            # Decrypt the attachment
-            attachment_data = aes_256_cbc_decrypt(key, nonce, enc_attachment_data)
-            attachment_data = attachment_data[16 : 16 + size]  # Dismiss the first 16 bytes and the padding
-            if bytes.fromhex(attachment["plaintextHash"]) != hash_sha256(attachment_data):
-                log(f"[!] Attachment {subpath} failed integrity check", 2)
-                integrity_error += 1
-
-            # Save the attachment to a file
-            filePath = subpath
-            if "contentType" in attachment:
-                filePath += f"{mime_to_extension(attachment['contentType'])}"
-
-            # Ensure the parent directory exists
-            attachment_path = attachments_dir / filePath
-            attachment_path.parent.mkdir(parents=True, exist_ok=True)
-            with attachment_path.open("wb") as f:
-                f.write(attachment_data)
-
-            counts += 1
-        except Exception as e:
-            error += 1
-            log(f"[!] Failed to export attachment {subpath}: {e}", 3)
+                log(f"[!] Failed to export attachment {subpath}: {e}", 3)
 
     log(f"[i] Exported {counts} attachments")
     if integrity_error > 0:
