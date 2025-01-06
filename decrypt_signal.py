@@ -365,21 +365,6 @@ def write_csv_file(path, headers, rows):
     return True
 
 
-# Print mentions in the message
-def print_mentions_in_message(text, bodyRanges):
-    if bodyRanges is None or text is None or type(bodyRanges) is not list or bodyRanges == []:
-        return text
-    newText = ""
-    j = 0
-    for i in range(len(bodyRanges)):
-        mention = bodyRanges[i]
-        # Text before the mentio
-        newText += text[j : mention["start"]]
-        j += mention["start"] + mention["length"]  # Skip the mention's representation
-        newText += mention["replacementText"]
-    return newText
-
-
 def select_sql(cursor, statement, name=None):
     if name is not None:
         log(f"[i] Fetching all {name}...", 2)
@@ -454,12 +439,30 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
 
     service2name = {}  # Dictionary of service ID to contact name
     conv2service = {}  # Dictionary of conversation ID to service ID
-    convId2conv = {}  # Dictionary of conversation ID to conversation name
+    convId2conv = {}  # Dictionary of conversation ID to name and type
 
-    def match_service_id(serviceId):
-        if serviceId is not None and serviceId in service2name:
-            return service2name[serviceId]
-        return None
+    # Print mentions in the message
+    def print_mentions_in_message(text, bodyRanges):
+        if bodyRanges is None or text is None or type(bodyRanges) is not list:
+            return text
+
+        # Only include mentions, remove other bodyRanges
+        bodyRanges = filter(lambda x: "mentionAci" in x, bodyRanges)
+
+        if len(bodyRanges) == 0:
+            return text
+
+        newText = ""
+        j = 0
+        for i in range(len(bodyRanges)):
+            mention = bodyRanges[i]
+            if "mentionAci" not in mention:
+                continue
+            # Text before the mentio
+            newText += text[j : mention["start"]]
+            j += mention["start"] + mention["length"]  # Skip the mention's representation
+            newText += "@" + mention.get("replacementText", service2name.get(mention["mentionAci"], "unknown"))
+        return newText
 
     # Process the last message with prefix and mentions.
     def process_last_message(convJson):
@@ -501,10 +504,14 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     # Populate the service2name dictionary
     for conv in conversations:
         convJson = json.loads(conv[1])
+        theName = convJson.get("name", "")
         if convType == "private":
-            service2name[conv[4]] = convJson.get("name", "")
+            if theName == "":
+                # If there is no "contact name" in the conversation JSON, use the profileFullName or e164
+                theName = conv[5] if conv[5] is not None else conv[6]
+            service2name[conv[4]] = theName
             conv2service[conv[0]] = conv[4]
-        convId2conv[conv[0]] = {"name": convJson.get("name", ""), "type": convType}
+        convId2conv[conv[0]] = {"name": theName, "type": convType}
 
     # Process conversations table data
     for conv in conversations:
@@ -566,19 +573,25 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Has Attachments?",
         "Is View Once?",
         "Is Erased?",
+        "Message Status",
         "Expires At",
+        "Has Edit History?",
+        "Has Reactions?",
         "Author's Service ID",
         "Author's Device",
     ]
 
+    MSGS_READ_STATUS_HEADERS = ["Message ID", "Target's Conversation ID", "Target's Name", "Message Status"]
+
     messages_rows = []
+    msgs_read_status_rows = []
 
     for msg_batch in fetch_batches_select(
         cursor,
-        "SELECT id, type, conversationId, json, hasAttachments, hasFileAttachments FROM messages WHERE type IN ('outgoing','incoming','group-v2-change');",
+        "SELECT id, type, conversationId, json, hasAttachments, hasFileAttachments, readStatus, seenStatus FROM messages WHERE type IN ('outgoing','incoming','group-v2-change');",
     ):
         for msg in msg_batch:
-            msgId, msgType, msgConvId, msgJsonStr, hasAttachments, hasFileAttachments = msg
+            msgId, msgType, msgConvId, msgJsonStr, hasAttachments, hasFileAttachments, readStatus, seenStatus = msg
             msgJson = json.loads(msgJsonStr)
 
             msgConvType = convId2conv.get(msgConvId, {}).get("type", "")
@@ -599,6 +612,40 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             if len(msgBodyRanges) > 0:
                 msgBody = print_mentions_in_message(msgBody, msgBodyRanges)
 
+            # Message view state handling
+            msgStatus = ""
+            if msgType == "incoming":
+                if readStatus == 0 and seenStatus == 2:
+                    msgStatus = "Read"
+                elif readStatus == 1 and seenStatus == 1:
+                    msgStatus = "Unread"
+                elif readStatus == 2 and seenStatus == 2:
+                    msgStatus = "Viewed"
+                else:
+                    # This should not happen
+                    msgStatus = f"UNKNOWN (readStatus: {readStatus} | seenStatus: {seenStatus})"
+            elif msgType == "outgoing":
+                sendStateByConversationId = msgJson.get("sendStateByConversationId", {})
+                if msgConvType == "private":
+                    msgStatus = sendStateByConversationId.get(msgConvId, {}).get("status", None)
+                elif msgConvType == "group":
+                    firstValStatus = None
+                    msgStatus = None
+                    for cId, value in sendStateByConversationId.items():
+
+                        valStatus = value.get("status", None)
+                        targetName = convId2conv.get(cId, {}).get("name", "")
+                        msgs_read_status_rows.append([msgId, cId, targetName, valStatus])  # REVIEW: Also include E164?
+
+                        if valStatus in ("Pending", "Sent"):
+                            continue
+                        if firstValStatus == None:
+                            firstValStatus = valStatus
+                            msgStatus = valStatus + " by all"
+                        elif firstValStatus != valStatus:
+                            msgStatus = "..."  # NOTE: Explain this
+                            break
+
             messages_rows.append(
                 msgId,
                 msgType,
@@ -612,6 +659,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 hasAttachments or hasFileAttachments,
                 msgJson.get("isViewOnce", False),
                 msgJson.get("isErased", False),
+                msgStatus
                 msgExpiresAt,
                 msgAuthorServiceId,
                 msgJson.get("sourceDevice", None),
