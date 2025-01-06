@@ -581,10 +581,10 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Author's Device",
     ]
 
-    MSGS_READ_STATUS_HEADERS = ["Message ID", "Target's Conversation ID", "Target's Name", "Message Status"]
+    MSGS_STATUSES_HEADERS = ["Message ID", "Target's Conversation ID", "Target's Name", "Message Status"]
 
     messages_rows = []
-    msgs_read_status_rows = []
+    msgs_statuses_rows = []
 
     for msg_batch in fetch_batches_select(
         cursor,
@@ -635,7 +635,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
 
                         valStatus = value.get("status", None)
                         targetName = convId2conv.get(cId, {}).get("name", "")
-                        msgs_read_status_rows.append([msgId, cId, targetName, valStatus])  # REVIEW: Also include E164?
+                        msgs_statuses_rows.append([msgId, cId, targetName, valStatus])  # REVIEW: Also include E164?
 
                         if valStatus in ("Pending", "Sent"):
                             continue
@@ -664,6 +664,12 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 msgAuthorServiceId,
                 msgJson.get("sourceDevice", None),
             )
+
+    # Write the csv files
+    if not write_csv_file(args.output / "messages.csv", MESSAGES_HEADERS, messages_rows):
+        log("[!] Failed to write the messages CSV file")
+    if not write_csv_file(args.output / "messages_statuses.csv", MSGS_STATUSES_HEADERS, msgs_statuses_rows):
+        log("[!] Failed to write the messages statuses CSV file")
 
 
 def export_attachments(cursor, args: argparse.Namespace):
