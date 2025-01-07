@@ -464,6 +464,14 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             newText += "@" + mention.get("replacementText", service2name.get(mention["mentionAci"], "unknown"))
         return newText
 
+    # Process the message body ranges
+    def process_message_bodyranges(msgJson, keyBodyRanges="bodyRanges", keyBody="body"):
+        msgBodyRanges = msgJson.get(keyBodyRanges, [])
+        msgBody = msgJson.get(keyBody, None)
+        if len(msgBodyRanges) > 0:
+            msgBody = print_mentions_in_message(msgBody, msgBodyRanges)
+        return msgBody
+
     # Process the last message with prefix and mentions.
     def process_last_message(convJson):
         last_message = print_mentions_in_message(
@@ -573,18 +581,23 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Has Attachments?",
         "Is View Once?",
         "Is Erased?",
-        "Message Status",
         "Expires At",
-        "Has Edit History?",
+        "Message Status",
         "Has Reactions?",
+        "Has Edit History?",
+        "Last Edit Received At",
         "Author's Service ID",
         "Author's Device",
     ]
 
-    MSGS_STATUSES_HEADERS = ["Message ID", "Target's Conversation ID", "Target's Name", "Message Status"]
+    MSGS_STATUSES_HEADERS = ["Message ID", "Target's Conversation ID", "Target's Name", "Message Status", "Timestamp"]
+    MSGS_VERSION_HISTS_HEADERS = ["Message Id", "Version Received At", "Body"]
+    MSGS_REACTIONS_HEADERS = ["Message ID", "Reactor's Conversation ID", "Reactor's Name", "Reaction", "Timestamp"]
 
     messages_rows = []
     msgs_statuses_rows = []
+    msgs_version_hists_rows = []
+    msgs_reactions_rows = []
 
     for msg_batch in fetch_batches_select(
         cursor,
@@ -598,6 +611,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             msgConvName = convId2conv.get(msgConvId, {}).get("name", "")
             msgAuthorServiceId = msgJson.get("sourceServiceId", None)
             msgAuthor = service2name.get(msgAuthorServiceId, "")
+            hasPreview = "preview" in msgJson and "image" in msgJson["preview"]
 
             # Message expiration handling
             expiresTimer = msgJson.get("expiresTimer", None)
@@ -606,10 +620,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 msgExpiresAt = msgJson.get("expirationStartTimestamp", None) + (expiresTimer * 1000)
 
             # Message body handling
-            msgBodyRanges = msgJson.get("bodyRanges", [])
-            msgBody = msgJson.get("body", None)
-            if len(msgBodyRanges) > 0:
-                msgBody = print_mentions_in_message(msgBody, msgBodyRanges)
+            msgBody = process_message_bodyranges(msgJson)
 
             # Message view state handling
             msgStatus = ""
@@ -633,8 +644,11 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                     for cId, value in sendStateByConversationId.items():
 
                         valStatus = value.get("status", None)
+                        valUpdatedAt = value.get("updatedAt", None)
                         targetName = convId2conv.get(cId, {}).get("name", "")
-                        msgs_statuses_rows.append([msgId, cId, targetName, valStatus])  # REVIEW: Also include E164?
+                        msgs_statuses_rows.append(
+                            [msgId, cId, targetName, valStatus, valUpdatedAt]
+                        )  # REVIEW: Also include E164?
 
                         if valStatus in ("Pending", "Sent"):
                             continue
@@ -645,8 +659,36 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                             msgStatus = "..."  # NOTE: Explain this
                             break
 
-            hasReactions = len(msgJson.get("reactions", [])) > 0
-            hasEditHistory = len(msgJson.get("editHistory", [])) > 0
+            # Message version history handling
+            msgEditHistory = msgJson.get("editHistory", [])
+            hasEditHistory = len(msgEditHistory) > 0
+            msgLastEditReceivedAt = msgJson.get("editMessageReceivedAtMs", None)
+
+            for version in msgEditHistory:
+                msgs_version_hists_rows.append(
+                    [
+                        msgId,
+                        version.get("received_at_ms", None),
+                        process_message_bodyranges(version),
+                    ]
+                )
+
+            # Message reactions handling
+            msgReactions = msgJson.get("reactions", [])
+            hasReactions = len(msgReactions) > 0
+
+            for reaction in msgReactions:
+                reactorConvId = reaction.get("fromId", None)
+                reactorName = convId2conv.get(reactorConvId, {}).get("name", "")
+                msgs_reactions_rows.append(
+                    [
+                        msgId,
+                        reactorConvId,
+                        reactorName,
+                        reaction.get("emoji", None),
+                        reaction.get("timestamp", None),
+                    ]
+                )
 
             messages_rows.append(
                 msgId,
@@ -655,16 +697,17 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 msgConvType,
                 msgConvName,
                 msgJson.get("sent_at", None),
-                msgJson.get("received_at", None),
+                msgJson.get("received_at_ms", None),
                 msgAuthor,
                 msgBody,
-                hasAttachments or hasFileAttachments,
+                hasAttachments or hasFileAttachments or hasPreview,
                 msgJson.get("isViewOnce", False),
                 msgJson.get("isErased", False),
-                msgStatus,
                 msgExpiresAt,
-                hasEditHistory,
+                msgStatus,
                 hasReactions,
+                hasEditHistory,
+                msgLastEditReceivedAt,
                 msgAuthorServiceId,
                 msgJson.get("sourceDevice", None),
             )
@@ -674,6 +717,12 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         log("[!] Failed to write the messages CSV file")
     if not write_csv_file(args.output / "messages_statuses.csv", MSGS_STATUSES_HEADERS, msgs_statuses_rows):
         log("[!] Failed to write the messages statuses CSV file")
+    if not write_csv_file(
+        args.output / "messages_version_histories.csv", MSGS_VERSION_HISTS_HEADERS, msgs_version_hists_rows
+    ):
+        log("[!] Failed to write the messages version histories CSV file")
+    if not write_csv_file(args.output / "messages_reactions.csv", MSGS_REACTIONS_HEADERS, msgs_reactions_rows):
+        log("[!] Failed to write the messages reactions CSV file")
 
 
 def export_attachments(cursor, args: argparse.Namespace):
