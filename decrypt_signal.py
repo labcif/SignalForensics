@@ -567,7 +567,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 convJson.get("unreadCount", 0),
                 convJson.get("messageCount", 0),
                 convJson.get("sentMessageCount", 0),
-                tts(convJson.get("lastMessageTimestamp", None))
+                tts(convJson.get("lastMessageTimestamp", None)),
                 convJson.get("lastMessageAuthor", None),
                 convLastMsg,
                 convJson.get("lastMessageDeletedForEveryone", None),
@@ -987,6 +987,11 @@ def main():
     if not args.skip_attachments:
         log("[i] Exporting attachments...")
         export_attachments(db_cursor, args)
+
+    # Generate CSV reports
+    if not args.skip_reports:
+        log("[i] Writing reports...")
+        process_database_and_write_reports(db_cursor, args)
 
     # Close the database connection
     log("Closing the database connections...", 3)
