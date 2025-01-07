@@ -379,8 +379,7 @@ def write_csv_file(path, headers, rows):
             writer = csv.writer(csvfile, delimiter=",")
 
             writer.writerow(headers)
-            for row in rows:
-                writer.writerow(row)
+            writer.writerows(rows)
     except Exception as e:
         log(f"[!] Failed to write CSV file: {e}")
         return False
@@ -796,7 +795,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                             [
                                 msgId,
                                 msgConvId,
-                                convJson.get("name", ""),
+                                convId2conv.get(msgConvId, {}).get("name", ""),
                                 tts(msgJson.get("received_at_ms", None)),
                                 msgAuthor,
                                 gcType,
