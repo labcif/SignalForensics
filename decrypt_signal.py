@@ -595,11 +595,22 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     MSGS_REACTIONS_HEADERS = ["Message ID", "Reactor's Conversation ID", "Reactor's Name", "Reaction", "Timestamp"]
     MSGS_ATTACHMENTS_HEADERS = ["Message ID", "Type", "Path", "Content Type"]
 
+    GROUPS_CHANGES_HEADERS = [
+        "Message ID",
+        "Conversation ID",
+        "Timestamp",
+        "Author's Name",
+        "Type",
+        "Details",
+        "Author's Service ID",
+    ]  # TODO: Details -> Something better
+
     messages_rows = []
     msgs_statuses_rows = []
     msgs_version_hists_rows = []
     msgs_reactions_rows = []
     msgs_attachments_rows = []
+    groups_changes_headers = []
 
     for msg_batch in fetch_batches_select(
         cursor,
@@ -607,138 +618,160 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     ):
         for msg in msg_batch:
             msgId, msgType, msgConvId, msgJsonStr, hasAttachments, hasFileAttachments, readStatus, seenStatus = msg
-            msgJson = json.loads(msgJsonStr)
+            try:
+                msgJson = json.loads(msgJsonStr)
 
-            msgConvType = convId2conv.get(msgConvId, {}).get("type", "")
-            msgConvName = convId2conv.get(msgConvId, {}).get("name", "")
-            msgAuthorServiceId = msgJson.get("sourceServiceId", None)
-            msgAuthor = service2name.get(msgAuthorServiceId, "")
+                msgConvType = convId2conv.get(msgConvId, {}).get("type", "")
+                msgConvName = convId2conv.get(msgConvId, {}).get("name", "")
+                msgAuthorServiceId = msgJson.get("sourceServiceId", None)
+                msgAuthor = service2name.get(msgAuthorServiceId, "")
 
-            # Message expiration handling
-            expiresTimer = msgJson.get("expiresTimer", None)
-            msgExpiresAt = None
-            if expiresTimer is not None:
-                msgExpiresAt = msgJson.get("expirationStartTimestamp", None) + (expiresTimer * 1000)
+                if msgType in ("outgoing", "incoming"):
+                    # Message expiration handling
+                    expiresTimer = msgJson.get("expiresTimer", None)
+                    msgExpiresAt = None
+                    if expiresTimer is not None:
+                        msgExpiresAt = msgJson.get("expirationStartTimestamp", None) + (expiresTimer * 1000)
 
-            # Message body handling
-            msgBody = process_message_bodyranges(msgJson)
+                    # Message body handling
+                    msgBody = process_message_bodyranges(msgJson)
 
-            # Message view state handling
-            msgStatus = ""
-            if msgType == "incoming":
-                if readStatus == 0 and seenStatus == 2:
-                    msgStatus = "Read"
-                elif readStatus == 1 and seenStatus == 1:
-                    msgStatus = "Unread"
-                elif readStatus == 2 and seenStatus == 2:
-                    msgStatus = "Viewed"
-                else:
-                    # This should not happen
-                    msgStatus = f"UNKNOWN (readStatus: {readStatus} | seenStatus: {seenStatus})"
-            elif msgType == "outgoing":
-                sendStateByConversationId = msgJson.get("sendStateByConversationId", {})
-                if msgConvType == "private":
-                    msgStatus = sendStateByConversationId.get(msgConvId, {}).get("status", None)
-                elif msgConvType == "group":
-                    firstValStatus = None
-                    msgStatus = None
-                    for cId, value in sendStateByConversationId.items():
+                    # Message view state handling
+                    msgStatus = ""
+                    if msgType == "incoming":
+                        if readStatus == 0 and seenStatus == 2:
+                            msgStatus = "Read"
+                        elif readStatus == 1 and seenStatus == 1:
+                            msgStatus = "Unread"
+                        elif readStatus == 2 and seenStatus == 2:
+                            msgStatus = "Viewed"
+                        else:
+                            # This should not happen
+                            msgStatus = f"UNKNOWN (readStatus: {readStatus} | seenStatus: {seenStatus})"
+                    elif msgType == "outgoing":
+                        sendStateByConversationId = msgJson.get("sendStateByConversationId", {})
+                        if msgConvType == "private":
+                            msgStatus = sendStateByConversationId.get(msgConvId, {}).get("status", None)
+                        elif msgConvType == "group":
+                            firstValStatus = None
+                            msgStatus = None
+                            for cId, value in sendStateByConversationId.items():
 
-                        valStatus = value.get("status", None)
-                        valUpdatedAt = value.get("updatedAt", None)
-                        targetName = convId2conv.get(cId, {}).get("name", "")
-                        msgs_statuses_rows.append(
-                            [msgId, cId, targetName, valStatus, valUpdatedAt]
-                        )  # REVIEW: Also include E164?
+                                valStatus = value.get("status", None)
+                                valUpdatedAt = value.get("updatedAt", None)
+                                targetName = convId2conv.get(cId, {}).get("name", "")
+                                msgs_statuses_rows.append(
+                                    [msgId, cId, targetName, valStatus, valUpdatedAt]
+                                )  # REVIEW: Also include E164?
 
-                        if valStatus in ("Pending", "Sent"):
-                            continue
-                        if firstValStatus == None:
-                            firstValStatus = valStatus
-                            msgStatus = valStatus + " by all"
-                        elif firstValStatus != valStatus:
-                            msgStatus = "..."  # NOTE: Explain this
-                            break
+                                if valStatus in ("Pending", "Sent"):
+                                    continue
+                                if firstValStatus == None:
+                                    firstValStatus = valStatus
+                                    msgStatus = valStatus + " by all"
+                                elif firstValStatus != valStatus:
+                                    msgStatus = "..."  # NOTE: Explain this
+                                    break
 
-            # Message version history handling
-            msgEditHistory = msgJson.get("editHistory", [])
-            hasEditHistory = len(msgEditHistory) > 0
-            msgLastEditReceivedAt = msgJson.get("editMessageReceivedAtMs", None)
+                    # Message version history handling
+                    msgEditHistory = msgJson.get("editHistory", [])
+                    hasEditHistory = len(msgEditHistory) > 0
+                    msgLastEditReceivedAt = msgJson.get("editMessageReceivedAtMs", None)
 
-            for version in msgEditHistory:
-                msgs_version_hists_rows.append(
-                    [
+                    for version in msgEditHistory:
+                        msgs_version_hists_rows.append(
+                            [
+                                msgId,
+                                version.get("received_at_ms", None),
+                                process_message_bodyranges(version),
+                            ]
+                        )
+
+                    # Message reactions handling
+                    msgReactions = msgJson.get("reactions", [])
+
+                    for reaction in msgReactions:
+                        reactorConvId = reaction.get("fromId", None)
+                        reactorName = convId2conv.get(reactorConvId, {}).get("name", "")
+                        msgs_reactions_rows.append(
+                            [
+                                msgId,
+                                reactorConvId,
+                                reactorName,
+                                reaction.get("emoji", None),
+                                reaction.get("timestamp", None),
+                            ]
+                        )
+
+                    # Handle attachments
+                    hasReactions = len(msgReactions) > 0
+                    hasPreview = "preview" in msgJson and "image" in msgJson["preview"]
+
+                    if hasAttachments or hasFileAttachments:
+                        attachments = msgJson.get("attachments", [])
+                        for attachment in attachments:
+                            msgs_attachments_rows.append(
+                                [
+                                    msgId,
+                                    "attachment",
+                                    attachment.get("path", None),
+                                    attachment.get("contentType", None),
+                                ]
+                            )
+                    if hasPreview:
+                        previews = msgJson.get("preview", [])
+                        for preview in previews:
+                            previewImg = preview.get("image", {})
+                            msgs_attachments_rows.append(
+                                [
+                                    msgId,
+                                    "preview",
+                                    previewImg.get("path", None),
+                                    previewImg.get("contentType", None),
+                                ]
+                            )
+
+                    messages_rows.append(
                         msgId,
-                        version.get("received_at_ms", None),
-                        process_message_bodyranges(version),
-                    ]
-                )
+                        msgType,
+                        msgConvId,
+                        msgConvType,
+                        msgConvName,
+                        msgJson.get("sent_at", None),
+                        msgJson.get("received_at_ms", None),
+                        msgAuthor,
+                        msgBody,
+                        hasAttachments or hasFileAttachments or hasPreview,
+                        msgJson.get("isViewOnce", False),
+                        msgJson.get("isErased", False),
+                        msgExpiresAt,
+                        msgStatus,
+                        hasReactions,
+                        hasEditHistory,
+                        msgLastEditReceivedAt,
+                        msgAuthorServiceId,
+                        msgJson.get("sourceDevice", None),
+                    )
 
-            # Message reactions handling
-            msgReactions = msgJson.get("reactions", [])
+                elif msgType == "group-v2-change":
+                    msgGrpChange = msgJson.get("groupV2Change", {})
+                    gcDetails = msgGrpChange.get("details", {})
 
-            for reaction in msgReactions:
-                reactorConvId = reaction.get("fromId", None)
-                reactorName = convId2conv.get(reactorConvId, {}).get("name", "")
-                msgs_reactions_rows.append(
-                    [
-                        msgId,
-                        reactorConvId,
-                        reactorName,
-                        reaction.get("emoji", None),
-                        reaction.get("timestamp", None),
-                    ]
-                )
-
-            # Handle attachments
-            hasReactions = len(msgReactions) > 0
-            hasPreview = "preview" in msgJson and "image" in msgJson["preview"]
-
-            if hasAttachments or hasFileAttachments:
-                attachments = msgJson.get("attachments", [])
-                for attachment in attachments:
-                    msgs_attachments_rows.append(
+                    gcType = gcDetails.get("type", None)
+                    groups_changes_headers.append(
                         [
                             msgId,
-                            "attachment",
-                            attachment.get("path", None),
-                            attachment.get("contentType", None),
-                        ]
-                    )
-            if hasPreview:
-                previews = msgJson.get("preview", [])
-                for preview in previews:
-                    previewImg = preview.get("image", {})
-                    msgs_attachments_rows.append(
-                        [
-                            msgId,
-                            "preview",
-                            previewImg.get("path", None),
-                            previewImg.get("contentType", None),
+                            msgConvId,
+                            msgJson.get("received_at_ms", None),
+                            msgAuthor,
+                            gcType,
+                            json.dumps(gcDetails),
+                            msgAuthorServiceId,
                         ]
                     )
 
-            messages_rows.append(
-                msgId,
-                msgType,
-                msgConvId,
-                msgConvType,
-                msgConvName,
-                msgJson.get("sent_at", None),
-                msgJson.get("received_at_ms", None),
-                msgAuthor,
-                msgBody,
-                hasAttachments or hasFileAttachments or hasPreview,
-                msgJson.get("isViewOnce", False),
-                msgJson.get("isErased", False),
-                msgExpiresAt,
-                msgStatus,
-                hasReactions,
-                hasEditHistory,
-                msgLastEditReceivedAt,
-                msgAuthorServiceId,
-                msgJson.get("sourceDevice", None),
-            )
+            except Exception as e:
+                log(f"[!] Failed to process message {msgId}: {e}", 3)
 
     # Write the csv files
     if not write_csv_file(args.output / "messages.csv", MESSAGES_HEADERS, messages_rows):
@@ -753,6 +786,8 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         log("[!] Failed to write the messages reactions CSV file")
     if not write_csv_file(args.output / "messages_attachments.csv", MSGS_ATTACHMENTS_HEADERS, msgs_attachments_rows):
         log("[!] Failed to write the messages attachments CSV file")
+    if not write_csv_file(args.output / "groups_changes.csv", GROUPS_CHANGES_HEADERS, groups_changes_headers):
+        log("[!] Failed to write the groups changes CSV file")
 
 
 def export_attachments(cursor, args: argparse.Namespace):
