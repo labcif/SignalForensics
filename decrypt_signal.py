@@ -374,10 +374,10 @@ def open_sqlcipher_db(args: argparse.Namespace, key: bytes):
 
 def write_csv_file(path, headers, rows):
     try:
-        with open(path, "w", newline="") as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=headers)
+        with open(path, "w", newline="", encoding="utf-8") as csvfile:
+            writer = csv.writer(csvfile)
 
-            writer.writeheader()
+            writer.writerow(headers)
             for row in rows:
                 writer.writerow(row)
     except Exception as e:
@@ -427,6 +427,12 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         log("[i] No conversations were found in the database")
         return
 
+    # Timestamp managing function
+    def tts(timestamp, ms=True):
+        if timestamp is None:
+            return None
+        return localize_timestamp(timestamp, args, ms)
+
     # Create CSV headers and row arrays
     CONVERSATIONS_HEADERS = [
         "ID",
@@ -469,7 +475,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             return text
 
         # Only include mentions, remove other bodyRanges
-        bodyRanges = filter(lambda x: "mentionAci" in x, bodyRanges)
+        bodyRanges = list(filter(lambda x: "mentionAci" in x, bodyRanges))
 
         if len(bodyRanges) == 0:
             return text
@@ -533,25 +539,26 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
 
     # Populate the service2name dictionary
     for conv in conversations:
-        convJson = json.loads(conv[1])
+        (convId, convJsonStr, convType, convActiveAt, serviceId, profileFullName, e164) = conv[:7]
+        convJson = json.loads(convJsonStr)
         theName = convJson.get("name", "")
         if convType == "private":
             if theName == "":
                 # If there is no "contact name" in the conversation JSON, use the profileFullName or e164
-                theName = conv[5] if conv[5] is not None else conv[6]
-            service2name[conv[4]] = theName
-            conv2service[conv[0]] = conv[4]
-        convId2conv[conv[0]] = {"name": theName, "type": convType}
+                theName = profileFullName if profileFullName is not None else e164
+            service2name[serviceId] = theName
+            conv2service[convId] = serviceId
+        convId2conv[convId] = {"name": theName, "type": convType}
 
     # Process conversations table data
     for conv in conversations:
-        convId, convJsonStr, convType, convActiveAt, serviceId = conv[:5]
+        (convId, convJsonStr, convType, convActiveAt, serviceId, profileFullName, e164) = conv[:7]
         convJson = json.loads(convJsonStr)
         convLastMsg = process_last_message(convJson)
         convDraft = print_mentions_in_message(convJson.get("draft", None), convJson.get("draftBodyRanges", None))
 
         if convType == "private":
-            contacts_rows.append([convId, convJson.get("name", ""), conv[6], conv[5], serviceId])
+            contacts_rows.append([convId, convJson.get("name", ""), e164, profileFullName, serviceId])
         elif convType == "group":
             process_group_members(convId, convJson, group_members_rows)
 
@@ -634,11 +641,6 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     msgs_reactions_rows = []
     msgs_attachments_rows = []
     groups_changes_headers = []
-
-    def tts(timestamp, ms=True):
-        if timestamp is None:
-            return None
-        return localize_timestamp(timestamp, args, ms)
 
     for msg_batch in fetch_batches_select(
         cursor,
