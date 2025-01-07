@@ -454,7 +454,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     CONTACTS_HEADERS = ["Conversation ID", "Name", "E164", "Profile Name", "Service ID"]
     GROUPS_MEMBERS_HEADERS = [
         "Conversation ID",
-        "Name",
+        "Group Name",
         "Group ID",
         "Type",
         "Member Service ID",
@@ -628,6 +628,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     GROUPS_CHANGES_HEADERS = [
         "Message ID",
         "Conversation ID",
+        "Group Name",
         "Timestamp",
         "Author's Name",
         "Type",
@@ -795,6 +796,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                             [
                                 msgId,
                                 msgConvId,
+                                convJson.get("name", ""),
                                 tts(msgJson.get("received_at_ms", None)),
                                 msgAuthor,
                                 gcType,
