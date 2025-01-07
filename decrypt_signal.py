@@ -9,6 +9,8 @@ import string
 import mimetypes
 import sys
 import csv
+from datetime import datetime
+import pytz
 
 import sqlcipher3
 
@@ -149,6 +151,25 @@ def parse_args():
     )
     parser.add_argument("-sA", "--skip-attachments", help="Skip attachment decryption", action="store_true")
     parser.add_argument("-sR", "--skip-reports", help="Skip the generation of CSV reports", action="store_true")
+
+    # Validate the provided timezone.
+    def validate_timezone(value):
+        if value not in pytz.all_timezones:
+            raise argparse.ArgumentTypeError(
+                f"Invalid timezone: {value}. Please provide a valid timezone (e.g., UTC, GMT, PST, Europe/Lisbon)."
+            )
+        return value
+
+    parser.add_argument(
+        "-t",
+        "--convert-timestamps",
+        nargs="?",
+        const="UTC",
+        default=None,
+        type=validate_timezone,
+        metavar="[timezone]",  # REVIEW: [] ? or <>
+        help="Convert timestamps to human-readable format. Provide a timezone (e.g., UTC, GMT, PST). Defaults to UTC when no timezone is provided.",
+    )
     # parser.add_argument(
     #    "-iM", "--include-metadata", help="Print user metadata from Signal database", action="store_true"
     # )
@@ -541,7 +562,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 convId,
                 convType,
                 convJson.get("name", ""),
-                convActiveAt,
+                tts(convActiveAt),
                 convJson.get("unreadCount", 0),
                 convJson.get("messageCount", 0),
                 convJson.get("sentMessageCount", 0),
@@ -549,7 +570,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 convLastMsg,
                 convJson.get("lastMessageDeletedForEveryone", None),
                 convDraft,
-                convJson.get("expireTimer", None),
+                convJson.get("expireTimer", None),  # REVIEW: Keep in seconds?
                 convJson.get("isArchived", False),
                 service2name.get(added_by, None),
             ]
@@ -612,6 +633,9 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     msgs_attachments_rows = []
     groups_changes_headers = []
 
+    def tts(timestamp, ms=True):
+        return localize_timestamp(timestamp, args, ms)
+
     for msg_batch in fetch_batches_select(
         cursor,
         "SELECT id, type, conversationId, json, hasAttachments, hasFileAttachments, readStatus, seenStatus FROM messages WHERE type IN ('outgoing','incoming','group-v2-change');",
@@ -661,7 +685,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                                 valUpdatedAt = value.get("updatedAt", None)
                                 targetName = convId2conv.get(cId, {}).get("name", "")
                                 msgs_statuses_rows.append(
-                                    [msgId, cId, targetName, valStatus, valUpdatedAt]
+                                    [msgId, cId, targetName, valStatus, tts(valUpdatedAt)]
                                 )  # REVIEW: Also include E164?
 
                                 if valStatus in ("Pending", "Sent"):
@@ -682,7 +706,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                         msgs_version_hists_rows.append(
                             [
                                 msgId,
-                                version.get("received_at_ms", None),
+                                tts(version.get("received_at_ms", None)),
                                 process_message_bodyranges(version),
                             ]
                         )
@@ -699,7 +723,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                                 reactorConvId,
                                 reactorName,
                                 reaction.get("emoji", None),
-                                reaction.get("timestamp", None),
+                                tts(reaction.get("timestamp", None)),
                             ]
                         )
 
@@ -737,18 +761,18 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                         msgConvId,
                         msgConvType,
                         msgConvName,
-                        msgJson.get("sent_at", None),
-                        msgJson.get("received_at_ms", None),
+                        tts(msgJson.get("sent_at", None)),
+                        tts(msgJson.get("received_at_ms", None)),
                         msgAuthor,
                         msgBody,
                         hasAttachments or hasFileAttachments or hasPreview,
                         msgJson.get("isViewOnce", False),
                         msgJson.get("isErased", False),
-                        msgExpiresAt,
+                        tts(msgExpiresAt),
                         msgStatus,
                         hasReactions,
                         hasEditHistory,
-                        msgLastEditReceivedAt,
+                        tts(msgLastEditReceivedAt),
                         msgAuthorServiceId,
                         msgJson.get("sourceDevice", None),
                     )
@@ -762,7 +786,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                         [
                             msgId,
                             msgConvId,
-                            msgJson.get("received_at_ms", None),
+                            tts(msgJson.get("received_at_ms", None)),
                             msgAuthor,
                             gcType,
                             json.dumps(gcDetails),
@@ -875,6 +899,20 @@ def export_attachments(cursor, args: argparse.Namespace):
 
 
 ####################### MISC HELPER FUNCTIONS #######################
+
+
+def localize_timestamp(timestamp, args: argparse.Namespace, ms=True):
+    tzStr = args.convert_timestamps
+    if not tzStr:
+        return timestamp
+    if ms:
+        timestamp = int(timestamp / 1000)
+    try:
+        dt = datetime.fromtimestamp(timestamp, pytz.timezone(tzStr))
+        return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+    except Exception as e:
+        log(f"[!] Failed to localize timestamp {timestamp}: {e}", 3)
+    return timestamp
 
 
 def generate_db_name(length=8, prefix="signal"):
