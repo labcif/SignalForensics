@@ -591,13 +591,15 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     ]
 
     MSGS_STATUSES_HEADERS = ["Message ID", "Target's Conversation ID", "Target's Name", "Message Status", "Timestamp"]
-    MSGS_VERSION_HISTS_HEADERS = ["Message Id", "Version Received At", "Body"]
+    MSGS_VERSION_HISTS_HEADERS = ["Message ID", "Version Received At", "Body"]
     MSGS_REACTIONS_HEADERS = ["Message ID", "Reactor's Conversation ID", "Reactor's Name", "Reaction", "Timestamp"]
+    MSGS_ATTACHMENTS_HEADERS = ["Message ID", "Type", "Path", "Content Type"]
 
     messages_rows = []
     msgs_statuses_rows = []
     msgs_version_hists_rows = []
     msgs_reactions_rows = []
+    msgs_attachments_rows = []
 
     for msg_batch in fetch_batches_select(
         cursor,
@@ -611,7 +613,6 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             msgConvName = convId2conv.get(msgConvId, {}).get("name", "")
             msgAuthorServiceId = msgJson.get("sourceServiceId", None)
             msgAuthor = service2name.get(msgAuthorServiceId, "")
-            hasPreview = "preview" in msgJson and "image" in msgJson["preview"]
 
             # Message expiration handling
             expiresTimer = msgJson.get("expiresTimer", None)
@@ -675,7 +676,6 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
 
             # Message reactions handling
             msgReactions = msgJson.get("reactions", [])
-            hasReactions = len(msgReactions) > 0
 
             for reaction in msgReactions:
                 reactorConvId = reaction.get("fromId", None)
@@ -689,6 +689,34 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                         reaction.get("timestamp", None),
                     ]
                 )
+
+            # Handle attachments
+            hasReactions = len(msgReactions) > 0
+            hasPreview = "preview" in msgJson and "image" in msgJson["preview"]
+
+            if hasAttachments or hasFileAttachments:
+                attachments = msgJson.get("attachments", [])
+                for attachment in attachments:
+                    msgs_attachments_rows.append(
+                        [
+                            msgId,
+                            "attachment",
+                            attachment.get("path", None),
+                            attachment.get("contentType", None),
+                        ]
+                    )
+            if hasPreview:
+                previews = msgJson.get("preview", [])
+                for preview in previews:
+                    previewImg = preview.get("image", {})
+                    msgs_attachments_rows.append(
+                        [
+                            msgId,
+                            "preview",
+                            previewImg.get("path", None),
+                            previewImg.get("contentType", None),
+                        ]
+                    )
 
             messages_rows.append(
                 msgId,
@@ -723,6 +751,8 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         log("[!] Failed to write the messages version histories CSV file")
     if not write_csv_file(args.output / "messages_reactions.csv", MSGS_REACTIONS_HEADERS, msgs_reactions_rows):
         log("[!] Failed to write the messages reactions CSV file")
+    if not write_csv_file(args.output / "messages_attachments.csv", MSGS_ATTACHMENTS_HEADERS, msgs_attachments_rows):
+        log("[!] Failed to write the messages attachments CSV file")
 
 
 def export_attachments(cursor, args: argparse.Namespace):
