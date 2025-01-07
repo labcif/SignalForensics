@@ -375,7 +375,8 @@ def open_sqlcipher_db(args: argparse.Namespace, key: bytes):
 def write_csv_file(path, headers, rows):
     try:
         with open(path, "w", newline="", encoding="utf-8") as csvfile:
-            writer = csv.writer(csvfile)
+            csvfile.write("SEP=,\n")
+            writer = csv.writer(csvfile, delimiter=",")
 
             writer.writerow(headers)
             for row in rows:
@@ -405,7 +406,6 @@ def fetch_batches_select(cursor, statement, batch_size=10000):
         query = f"{statement} LIMIT {batch_size} OFFSET {offset}"
         cursor.execute(query)
         rows = cursor.fetchall()
-
         yield rows
         offset += batch_size
 
@@ -445,7 +445,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Last Message Timestamp",
         "Last Message Author",
         "Last Message",
-        "Last Message Deleted For Everyone",
+        "Last Message Deleted?",
         "Draft Message",
         "Expire Timer (seconds)",
         "Is Archived?",
@@ -640,11 +640,11 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     msgs_version_hists_rows = []
     msgs_reactions_rows = []
     msgs_attachments_rows = []
-    groups_changes_headers = []
+    groups_changes_rows = []
 
     for msg_batch in fetch_batches_select(
         cursor,
-        "SELECT id, type, conversationId, json, hasAttachments, hasFileAttachments, readStatus, seenStatus FROM messages WHERE type IN ('outgoing','incoming','group-v2-change');",
+        "SELECT id, type, conversationId, json, hasAttachments, hasFileAttachments, readStatus, seenStatus FROM messages WHERE type IN ('outgoing','incoming','group-v2-change')",
     ):
         for msg in msg_batch:
             msgId, msgType, msgConvId, msgJsonStr, hasAttachments, hasFileAttachments, readStatus, seenStatus = msg
@@ -762,43 +762,46 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                             )
 
                     messages_rows.append(
-                        msgId,
-                        msgType,
-                        msgConvId,
-                        msgConvType,
-                        msgConvName,
-                        tts(msgJson.get("sent_at", None)),
-                        tts(msgJson.get("received_at_ms", None)),
-                        msgAuthor,
-                        msgBody,
-                        hasAttachments or hasFileAttachments or hasPreview,
-                        msgJson.get("isViewOnce", False),
-                        msgJson.get("isErased", False),
-                        tts(msgExpiresAt),
-                        msgStatus,
-                        hasReactions,
-                        hasEditHistory,
-                        tts(msgLastEditReceivedAt),
-                        msgAuthorServiceId,
-                        msgJson.get("sourceDevice", None),
-                    )
-
-                elif msgType == "group-v2-change":
-                    msgGrpChange = msgJson.get("groupV2Change", {})
-                    gcDetails = msgGrpChange.get("details", {})
-
-                    gcType = gcDetails.get("type", None)
-                    groups_changes_headers.append(
                         [
                             msgId,
+                            msgType,
                             msgConvId,
+                            msgConvType,
+                            msgConvName,
+                            tts(msgJson.get("sent_at", None)),
                             tts(msgJson.get("received_at_ms", None)),
                             msgAuthor,
-                            gcType,
-                            json.dumps(gcDetails),
+                            msgBody,
+                            hasAttachments or hasFileAttachments or hasPreview,
+                            msgJson.get("isViewOnce", False),
+                            msgJson.get("isErased", False),
+                            tts(msgExpiresAt),
+                            msgStatus,
+                            hasReactions,
+                            hasEditHistory,
+                            tts(msgLastEditReceivedAt),
                             msgAuthorServiceId,
+                            msgJson.get("sourceDevice", None),
                         ]
                     )
+                elif msgType == "group-v2-change":
+                    msgGrpChange = msgJson.get("groupV2Change", {})
+                    gcDetails = msgGrpChange.get("details", [])
+
+                    for gcDetail in gcDetails:
+                        gcType = gcDetail.get("type", None)
+
+                        groups_changes_rows.append(
+                            [
+                                msgId,
+                                msgConvId,
+                                tts(msgJson.get("received_at_ms", None)),
+                                msgAuthor,
+                                gcType,
+                                json.dumps(gcDetails),
+                                msgAuthorServiceId,
+                            ]
+                        )
 
             except Exception as e:
                 log(f"[!] Failed to process message {msgId}: {e}", 3)
@@ -816,7 +819,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         log("[!] Failed to write the messages reactions CSV file")
     if not write_csv_file(args.output / "messages_attachments.csv", MSGS_ATTACHMENTS_HEADERS, msgs_attachments_rows):
         log("[!] Failed to write the messages attachments CSV file")
-    if not write_csv_file(args.output / "groups_changes.csv", GROUPS_CHANGES_HEADERS, groups_changes_headers):
+    if not write_csv_file(args.output / "groups_changes.csv", GROUPS_CHANGES_HEADERS, groups_changes_rows):
         log("[!] Failed to write the groups changes CSV file")
 
 
