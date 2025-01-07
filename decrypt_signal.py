@@ -436,6 +436,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Unread Messages",
         "Total Message Count",
         "Sent Message Count",
+        "Last Message Timestamp",
         "Last Message Author",
         "Last Message",
         "Last Message Deleted For Everyone",
@@ -566,6 +567,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 convJson.get("unreadCount", 0),
                 convJson.get("messageCount", 0),
                 convJson.get("sentMessageCount", 0),
+                tts(convJson.get("lastMessageTimestamp", None))
                 convJson.get("lastMessageAuthor", None),
                 convLastMsg,
                 convJson.get("lastMessageDeletedForEveryone", None),
@@ -634,6 +636,8 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     groups_changes_headers = []
 
     def tts(timestamp, ms=True):
+        if timestamp is None:
+            return None
         return localize_timestamp(timestamp, args, ms)
 
     for msg_batch in fetch_batches_select(
