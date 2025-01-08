@@ -477,7 +477,9 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     group_members_rows = []
 
     service2name = {}  # Dictionary of service ID to contact name
+    group2name = {}  # Dictionary of group ID to group name
     conv2service = {}  # Dictionary of conversation ID to service ID
+    conv2group = {}  # Dictionary of conversation ID to group ID
     convId2conv = {}  # Dictionary of conversation ID to name and type
 
     # Print mentions in the message
@@ -559,6 +561,10 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 theName = profileFullName if profileFullName is not None else e164
             service2name[serviceId] = theName
             conv2service[convId] = serviceId
+        elif convType == "group":
+            groupId = convJson.get("groupId", None)
+            group2name[groupId] = theName
+            conv2group[convId] = groupId
         convId2conv[convId] = {"name": theName, "type": convType}
 
     # Process conversations table data
@@ -648,6 +654,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     GROUPS_CHANGES_HEADERS = [
         "Message ID",
         "Conversation ID",
+        "Group ID",
         "Group Name",
         "Timestamp",
         "Author's Name",
@@ -831,6 +838,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                             [
                                 msgId,
                                 msgConvId,
+                                conv2group.get(msgConvId, None),
                                 convId2conv.get(msgConvId, {}).get("name", ""),
                                 tts(msgJson.get("received_at_ms", None)),
                                 msgAuthor,
@@ -896,6 +904,62 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         msgs_attachments_rows.clear()
         groups_changes_rows.clear()
         convIdKeys.clear()
+
+    del messages_rows
+    del msgs_statuses_rows
+    del msgs_version_hists_rows
+    del msgs_reactions_rows
+    del msgs_attachments_rows
+    del groups_changes_rows
+    del convIdKeys
+
+    call_history = select_sql(
+        cursor,
+        "SELECT callId, peerId, ringerId, mode, type, direction, status, timestamp, startedById, endedTimestamp FROM callsHistory;",
+        "call logs",
+    )
+
+    if len(call_history) == 0:
+        log("[i] No call logs were found in the database")
+    else:
+        CALLS_HEADERS = [
+            "Call ID",
+            "Peer's Name",
+            "Ringer's Name",
+            "Mode",
+            "Type",
+            "Direction",
+            "Status",
+            "Timestamp",
+            "Ended Timestamp",
+            "Peer's ID",
+            "Ringer's ID",
+        ]
+        calls_rows = []
+        for call in call_history:
+            callId, peerId, ringerId, mode, callType, direction, status, timestamp, startedById, endedTimestamp = call
+            peerName = service2name.get(peerId, "") if mode == "Direct" else group2name.get(peerId, "")
+            if mode == "Direct" and direction == "Incoming":
+                ringerId = peerId
+            ringerName = service2name.get(ringerId, service2name.get(startedById, ""))
+
+            calls_rows.append(
+                [
+                    str(callId),
+                    peerName,
+                    ringerName,
+                    mode,
+                    callType,
+                    direction,
+                    status,
+                    tts(timestamp),
+                    tts(endedTimestamp),
+                    peerId,
+                    ringerId,
+                ]
+            )
+        if not write_csv_file(args.output / "calls_history.csv", CALLS_HEADERS, calls_rows):
+            log("[!] Failed to write the calls CSV file")
 
 
 def export_attachments(cursor, args: argparse.Namespace):
