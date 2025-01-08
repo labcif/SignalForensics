@@ -373,12 +373,15 @@ def open_sqlcipher_db(args: argparse.Namespace, key: bytes):
 
 
 def write_csv_file(path, headers, rows):
+    if len(rows) == 0:
+        return True
     try:
-        with open(path, "w", newline="", encoding="utf-8") as csvfile:
-            csvfile.write("SEP=,\n")
+        fileExists = path.is_file()
+        with open(path, "a", newline="", encoding="utf-8") as csvfile:
             writer = csv.writer(csvfile, delimiter=",")
-
-            writer.writerow(headers)
+            if not fileExists:
+                csvfile.write("SEP=,\n")
+                writer.writerow(headers)
             writer.writerows(rows)
     except Exception as e:
         log(f"[!] Failed to write CSV file: {e}")
@@ -593,6 +596,9 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         log("[!] Failed to write the groups members CSV file")
 
     # Free memory
+    conv_rows.clear()
+    contacts_rows.clear()
+    group_members_rows.clear()
     del conv_rows
     del contacts_rows
     del group_members_rows
@@ -635,17 +641,17 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Author's Service ID",
     ]  # TODO: Details -> Something better
 
-    messages_rows = []
-    msgs_statuses_rows = []
-    msgs_version_hists_rows = []
-    msgs_reactions_rows = []
-    msgs_attachments_rows = []
-    groups_changes_rows = []
-
     for msg_batch in fetch_batches_select(
         cursor,
         "SELECT id, type, conversationId, json, hasAttachments, hasFileAttachments, readStatus, seenStatus FROM messages WHERE type IN ('outgoing','incoming','group-v2-change')",
     ):
+        messages_rows = []
+        msgs_statuses_rows = []
+        msgs_version_hists_rows = []
+        msgs_reactions_rows = []
+        msgs_attachments_rows = []
+        groups_changes_rows = []
+
         for msg in msg_batch:
             msgId, msgType, msgConvId, msgJsonStr, hasAttachments, hasFileAttachments, readStatus, seenStatus = msg
             try:
@@ -807,21 +813,31 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             except Exception as e:
                 log(f"[!] Failed to process message {msgId}: {e}", 3)
 
-    # Write the csv files
-    if not write_csv_file(args.output / "messages.csv", MESSAGES_HEADERS, messages_rows):
-        log("[!] Failed to write the messages CSV file")
-    if not write_csv_file(args.output / "messages_statuses.csv", MSGS_STATUSES_HEADERS, msgs_statuses_rows):
-        log("[!] Failed to write the messages statuses CSV file")
-    if not write_csv_file(
-        args.output / "messages_version_histories.csv", MSGS_VERSION_HISTS_HEADERS, msgs_version_hists_rows
-    ):
-        log("[!] Failed to write the messages version histories CSV file")
-    if not write_csv_file(args.output / "messages_reactions.csv", MSGS_REACTIONS_HEADERS, msgs_reactions_rows):
-        log("[!] Failed to write the messages reactions CSV file")
-    if not write_csv_file(args.output / "messages_attachments.csv", MSGS_ATTACHMENTS_HEADERS, msgs_attachments_rows):
-        log("[!] Failed to write the messages attachments CSV file")
-    if not write_csv_file(args.output / "groups_changes.csv", GROUPS_CHANGES_HEADERS, groups_changes_rows):
-        log("[!] Failed to write the groups changes CSV file")
+        # Append to the csv files
+        if not write_csv_file(args.output / "messages.csv", MESSAGES_HEADERS, messages_rows):
+            log("[!] Failed to write to the messages CSV file")
+        if not write_csv_file(args.output / "messages_statuses.csv", MSGS_STATUSES_HEADERS, msgs_statuses_rows):
+            log("[!] Failed to write to the messages statuses CSV file")
+        if not write_csv_file(
+            args.output / "messages_version_histories.csv", MSGS_VERSION_HISTS_HEADERS, msgs_version_hists_rows
+        ):
+            log("[!] Failed to write to the messages version histories CSV file")
+        if not write_csv_file(args.output / "messages_reactions.csv", MSGS_REACTIONS_HEADERS, msgs_reactions_rows):
+            log("[!] Failed to write to the messages reactions CSV file")
+        if not write_csv_file(
+            args.output / "messages_attachments.csv", MSGS_ATTACHMENTS_HEADERS, msgs_attachments_rows
+        ):
+            log("[!] Failed to write to the messages attachments CSV file")
+        if not write_csv_file(args.output / "groups_changes.csv", GROUPS_CHANGES_HEADERS, groups_changes_rows):
+            log("[!] Failed to write to the groups changes CSV file")
+
+        # Free memory
+        messages_rows.clear()
+        msgs_statuses_rows.clear()
+        msgs_version_hists_rows.clear()
+        msgs_reactions_rows.clear()
+        msgs_attachments_rows.clear()
+        groups_changes_rows.clear()
 
 
 def export_attachments(cursor, args: argparse.Namespace):
