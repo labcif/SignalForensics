@@ -710,7 +710,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                         elif msgConvType == "group":
                             firstValStatus = None
                             msgStatus = None
-                            for cId, value in sendStateByConversationId.items():
+                            for cId, value in reversed(sendStateByConversationId.items()):
 
                                 valStatus = value.get("status", None)
                                 valUpdatedAt = value.get("updatedAt", None)
@@ -858,7 +858,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 log("[!] Failed to write to the messages CSV file")
 
             if not write_csv_file(
-                reportFolder / f"outgoing_messages_statuses{suffix}.csv",
+                reportFolder / f"outgoing_group_messages_statuses{suffix}.csv",
                 MSGS_STATUSES_HEADERS,
                 msgs_statuses_rows[kConvId],
             ):
