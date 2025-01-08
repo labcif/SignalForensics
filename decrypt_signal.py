@@ -461,6 +461,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Expire Timer (seconds)",
         "Is Archived?",
         "Added By",
+        "Avatar Path",
     ]
     CONTACTS_HEADERS = ["Conversation ID", "Name", "E164", "Profile Name", "Service ID"]
     GROUPS_MEMBERS_HEADERS = [
@@ -571,6 +572,13 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     for conv in conversations:
         (convId, convJsonStr, convType, convActiveAt, serviceId, profileFullName, e164) = conv[:7]
         convJson = json.loads(convJsonStr)
+
+        avatarPathParts = [avatar.get("path", None) for avatar in handle_avatar(convJson, convType)]
+        if len(avatarPathParts) > 1:
+            avatarPathParts[0] += " (CURRENT)"
+
+        avatarPath = "\n".join(filter(None, avatarPathParts))
+
         convLastMsg = process_last_message(convJson)
         convDraft = print_mentions_in_message(convJson.get("draft", None), convJson.get("draftBodyRanges", None))
 
@@ -599,6 +607,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 convJson.get("expireTimer", None),  # REVIEW: Keep in seconds?
                 convJson.get("isArchived", False),
                 service2name.get(added_by, None),
+                avatarPath,
             ]
         )
 
@@ -962,82 +971,128 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             log("[!] Failed to write the calls CSV file")
 
 
+def handle_avatar(convJson, convType):
+    keyName = "avatar" if convType == "group" else "profileAvatar"
+    theAvatar = convJson.get(keyName, None)
+    theAvatars = convJson.get("avatars", [])
+    if theAvatar is not None:
+        theAvatars.insert(0, theAvatar)
+    for avatar in theAvatars:
+        if avatar.get("localKey", None) is not None:
+            avatar["iv"] = "AAAAAAAAAAAAAAAAAAAAAA=="
+            imgPath = avatar.get("imagePath", None)
+            if imgPath is not None:
+                avatar["path"] = imgPath
+            yield avatar
+    return
+
+
 def export_attachments(cursor, args: argparse.Namespace):
     attachments_dir = args.output / "attachments"
     attachments_dir.mkdir(parents=True, exist_ok=True)
 
     # Fetch all attachment data
-    log("[i] Fetching attachment metadata...", 2)
-    try:
-        cursor.execute(
-            "SELECT json from messages WHERE hasFileAttachments = TRUE OR hasAttachments = TRUE OR json LIKE '%\"preview\":[{%';"
-        )
-        messages = cursor.fetchall()
-    except sqlcipher3.DatabaseError as e:
-        raise sqlcipher3.DatabaseError("Failed to fetch attachment metadata.") from e
+    messages = select_sql(
+        cursor,
+        "SELECT json from messages WHERE hasFileAttachments = TRUE OR hasAttachments = TRUE OR json LIKE '%\"preview\":[{%';",
+        "attachment metadata",
+    )
+
+    # Process each attachment
+    all_attachments = []
 
     if len(messages) == 0:
         log("[i] No attachments were found in the database")
+    else:
+        for entry in messages:
+            # Parse the message metadata
+            msgJson = json.loads(entry[0])
+            attachments = msgJson.get("attachments", [])
+
+            # Preview of embed urls
+            if "preview" in msgJson and "image" in msgJson["preview"]:
+                attachments.append(msgJson["preview"]["image"])
+
+            all_attachments.extend(attachments)
+
+    del messages  # Free memory
+
+    # Fetch conversation data
+    conversations = select_sql(
+        cursor,
+        "SELECT json, type FROM conversations;",
+        "conversations",
+    )
+
+    if len(conversations) == 0:
+        log("[i] No conversations were found in the database")
+    else:
+        withAvatar = 0
+        for conv in conversations:
+            convJsonStr, convType = conv
+            convJson = json.loads(convJsonStr)
+            for avatar in handle_avatar(convJson, convType):
+                avatar["contentType"] = "image/jpeg"
+                all_attachments.append(avatar)
+                withAvatar += 1
+
+        log(f"[i] Found {withAvatar} conversation avatars metadata", 2)
+
+    del conversations
+
+    if len(all_attachments) == 0:
         return
 
-    # Process each attachment
+    # For each attachment in the message
     log("[i] Processing metadata and decrypting attachments...", 2)
     counts = 0
     error = 0
     integrity_error = 0
-    for entry in messages:
-        # Parse the message metadata
-        msgJson = json.loads(entry[0])
-        attachments = msgJson.get("attachments", [])
+    for attachment in all_attachments:
+        subpath = attachment["path"]
+        try:
+            # Fetch attachment crypto data
+            key = base64.b64decode(attachment["localKey"])[:32]
+            nonce = base64.b64decode(attachment["iv"])
+            size = int(attachment["size"])
 
-        # Preview of embed urls
-        if "preview" in msgJson and "image" in msgJson["preview"]:
-            attachments.append(msgJson["preview"]["image"])
+            # Encrypted attachment path
+            folder = "attachments.noindex" if "imagePath" not in attachment else "avatars.noindex"
+            enc_attachment_path = args.dir / folder / subpath
 
-        # For each attachment in the message
-        for attachment in attachments:
-            subpath = attachment["path"]
-            try:
-                # Fetch attachment crypto data
-                key = base64.b64decode(attachment["localKey"])[:32]
-                nonce = base64.b64decode(attachment["iv"])
-                size = int(attachment["size"])
-
-                # Encrypted attachment path
-                enc_attachment_path = args.dir / "attachments.noindex" / subpath
-
-                # Check if the encrypted attachment is present on the expected path
-                if not enc_attachment_path.is_file():
-                    log(f"[!] Attachment {subpath} not found", 2)
-                    error += 1
-                    continue
-
-                # Fetch attachment cipherdata
-                with enc_attachment_path.open("rb") as f:
-                    enc_attachment_data = f.read()
-
-                # Decrypt the attachment
-                attachment_data = aes_256_cbc_decrypt(key, nonce, enc_attachment_data)
-                attachment_data = attachment_data[16 : 16 + size]  # Dismiss the first 16 bytes and the padding
-                if bytes.fromhex(attachment["plaintextHash"]) != hash_sha256(attachment_data):
-                    log(f"[!] Attachment {subpath} failed integrity check", 2)
-                    integrity_error += 1
-
-                # Save the attachment to a file
-                filePath = subpath
-                if "contentType" in attachment:
-                    filePath += f"{mime_to_extension(attachment['contentType'])}"
-
-                # Ensure the parent directory exists
-                attachment_path = attachments_dir / filePath
-                attachment_path.parent.mkdir(parents=True, exist_ok=True)
-                with attachment_path.open("wb") as f:
-                    f.write(attachment_data)
-
-                counts += 1
-            except Exception as e:
+            # Check if the encrypted attachment is present on the expected path
+            if not enc_attachment_path.is_file():
+                log(f"[!] Attachment {subpath} not found", 2)
                 error += 1
-                log(f"[!] Failed to export attachment {subpath}: {e}", 3)
+                continue
+
+            # Fetch attachment cipherdata
+            with enc_attachment_path.open("rb") as f:
+                enc_attachment_data = f.read()
+
+            # Decrypt the attachment
+            attachment_data = aes_256_cbc_decrypt(key, nonce, enc_attachment_data)
+            attachment_data = attachment_data[16 : 16 + size]  # Dismiss the first 16 bytes and the padding
+            if bytes.fromhex(attachment["plaintextHash"]) != hash_sha256(attachment_data):
+                log(f"[!] Attachment {subpath} failed integrity check", 2)
+                integrity_error += 1
+
+            # Save the attachment to a file
+            filePath = subpath
+            if "contentType" in attachment:
+                filePath += f"{mime_to_extension(attachment['contentType'])}"
+
+            # Ensure the parent directory exists
+            attachment_path = attachments_dir / filePath
+            attachment_path.parent.mkdir(parents=True, exist_ok=True)
+            with attachment_path.open("wb") as f:
+                f.write(attachment_data)
+
+            counts += 1
+        except Exception as e:
+            error += 1
+            log(f"[!] Failed to export attachment {subpath}: {e}", 3)
+            raise e
 
     log(f"[i] Exported {counts} attachments")
     if integrity_error > 0:
