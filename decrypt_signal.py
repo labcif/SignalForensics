@@ -634,7 +634,13 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Author's Device",
     ]
 
-    MSGS_STATUSES_HEADERS = ["Message ID", "Target's Conversation ID", "Target's Name", "Message Status", "Timestamp"]
+    MSGS_STATUSES_HEADERS = [
+        "Message ID",
+        "Target's Conversation ID",
+        "Target's Name",
+        "Message Status",
+        "Status Timestamp",
+    ]
     MSGS_VERSION_HISTS_HEADERS = ["Message ID", "Version Received At", "Body"]
     MSGS_REACTIONS_HEADERS = ["Message ID", "Reactor's Conversation ID", "Reactor's Name", "Reaction", "Timestamp"]
     MSGS_ATTACHMENTS_HEADERS = ["Message ID", "Type", "Path", "Content Type"]
@@ -780,7 +786,6 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                                 ]
                             )
 
-                    updatedExpireTimer = False
                     if "expirationTimerUpdate" in msgJson:
                         msgEtu = msgJson.get("expirationTimerUpdate", {})
                         expireTimer = msgEtu.get("expireTimer", None)
@@ -853,7 +858,9 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 log("[!] Failed to write to the messages CSV file")
 
             if not write_csv_file(
-                reportFolder / f"messages_statuses{suffix}.csv", MSGS_STATUSES_HEADERS, msgs_statuses_rows[kConvId]
+                reportFolder / f"outgoing_messages_statuses{suffix}.csv",
+                MSGS_STATUSES_HEADERS,
+                msgs_statuses_rows[kConvId],
             ):
                 log("[!] Failed to write to the messages statuses CSV file")
 
