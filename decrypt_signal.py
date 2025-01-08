@@ -11,6 +11,7 @@ import sys
 import csv
 from datetime import datetime
 import pytz
+from collections import defaultdict
 
 import sqlcipher3
 
@@ -170,6 +171,14 @@ def parse_args():
         metavar="[timezone]",  # REVIEW: [] ? or <>
         help="Convert timestamps to human-readable format. Provide a timezone (e.g., UTC, GMT, PST). Defaults to UTC when no timezone is provided.",
     )
+
+    parser.add_argument(
+        "-mc",
+        "--merge-conversations",
+        help="Merge message related reports into single CSV files instead of separating them by conversation",
+        action="store_true",
+    )
+
     # parser.add_argument(
     #    "-iM", "--include-metadata", help="Print user metadata from Signal database", action="store_true"
     # )
@@ -513,7 +522,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         return last_message
 
     # Process group members and add to group_members_rows.
-    def process_group_members(convId, convJson, group_members_rows):
+    def process_group_members(convId, convJson):
         # TODO: """Process group members and add to group_members_rows."""
         MEMBER_KEYS = {
             "membersV2": "Member",
@@ -562,7 +571,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         if convType == "private":
             contacts_rows.append([convId, convJson.get("name", ""), e164, profileFullName, serviceId])
         elif convType == "group":
-            process_group_members(convId, convJson, group_members_rows)
+            process_group_members(convId, convJson)
 
         added_by = convJson.get("addedBy", None)
 
@@ -643,17 +652,21 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
 
     for msg_batch in fetch_batches_select(
         cursor,
-        "SELECT id, type, conversationId, json, hasAttachments, hasFileAttachments, readStatus, seenStatus FROM messages WHERE type IN ('outgoing','incoming','group-v2-change')",
+        "SELECT id, type, conversationId, json, hasAttachments, hasFileAttachments, readStatus, seenStatus FROM messages WHERE type IN ('outgoing','incoming','group-v2-change','timer-notification')",
     ):
-        messages_rows = []
-        msgs_statuses_rows = []
-        msgs_version_hists_rows = []
-        msgs_reactions_rows = []
-        msgs_attachments_rows = []
-        groups_changes_rows = []
+        messages_rows = defaultdict(list)
+        msgs_statuses_rows = defaultdict(list)
+        msgs_version_hists_rows = defaultdict(list)
+        msgs_reactions_rows = defaultdict(list)
+        msgs_attachments_rows = defaultdict(list)
+        groups_changes_rows = defaultdict(list)
+        convIdKeys = []
 
         for msg in msg_batch:
             msgId, msgType, msgConvId, msgJsonStr, hasAttachments, hasFileAttachments, readStatus, seenStatus = msg
+            convIdKey = msgConvId if not args.merge_conversations else None
+            if convIdKey not in convIdKeys:
+                convIdKeys.append(convIdKey)
             try:
                 msgJson = json.loads(msgJsonStr)
 
@@ -662,7 +675,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 msgAuthorServiceId = msgJson.get("sourceServiceId", None)
                 msgAuthor = service2name.get(msgAuthorServiceId, "")
 
-                if msgType in ("outgoing", "incoming"):
+                if msgType in ("outgoing", "incoming", "timer-notification"):
                     # Message expiration handling
                     expiresTimer = msgJson.get("expiresTimer", None)
                     msgExpiresAt = None
@@ -696,7 +709,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                                 valStatus = value.get("status", None)
                                 valUpdatedAt = value.get("updatedAt", None)
                                 targetName = convId2conv.get(cId, {}).get("name", "")
-                                msgs_statuses_rows.append(
+                                msgs_statuses_rows[convIdKey].append(
                                     [msgId, cId, targetName, valStatus, tts(valUpdatedAt)]
                                 )  # REVIEW: Also include E164?
 
@@ -715,7 +728,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                     msgLastEditReceivedAt = msgJson.get("editMessageReceivedAtMs", None)
 
                     for version in msgEditHistory:
-                        msgs_version_hists_rows.append(
+                        msgs_version_hists_rows[convIdKey].append(
                             [
                                 msgId,
                                 tts(version.get("received_at_ms", None)),
@@ -729,7 +742,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                     for reaction in msgReactions:
                         reactorConvId = reaction.get("fromId", None)
                         reactorName = convId2conv.get(reactorConvId, {}).get("name", "")
-                        msgs_reactions_rows.append(
+                        msgs_reactions_rows[convIdKey].append(
                             [
                                 msgId,
                                 reactorConvId,
@@ -746,7 +759,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                     if hasAttachments or hasFileAttachments:
                         attachments = msgJson.get("attachments", [])
                         for attachment in attachments:
-                            msgs_attachments_rows.append(
+                            msgs_attachments_rows[convIdKey].append(
                                 [
                                     msgId,
                                     "attachment",
@@ -758,7 +771,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                         previews = msgJson.get("preview", [])
                         for preview in previews:
                             previewImg = preview.get("image", {})
-                            msgs_attachments_rows.append(
+                            msgs_attachments_rows[convIdKey].append(
                                 [
                                     msgId,
                                     "preview",
@@ -767,7 +780,19 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                                 ]
                             )
 
-                    messages_rows.append(
+                    updatedExpireTimer = False
+                    if "expirationTimerUpdate" in msgJson:
+                        msgEtu = msgJson.get("expirationTimerUpdate", {})
+                        expireTimer = msgEtu.get("expireTimer", None)
+                        msgAuthorServiceId = msgEtu.get("sourceServiceId", None)
+                        msgAuthor = service2name.get(msgAuthorServiceId, "")
+                        msgBody = (
+                            f"{msgAuthor} updated the expiration timer to {str(expireTimer)} seconds"
+                            if expireTimer is not None
+                            else f"{msgAuthor} disabled the expiration timer"
+                        )
+
+                    messages_rows[convIdKey].append(
                         [
                             msgId,
                             msgType,
@@ -797,7 +822,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                     for gcDetail in gcDetails:
                         gcType = gcDetail.get("type", None)
 
-                        groups_changes_rows.append(
+                        groups_changes_rows[convIdKey].append(
                             [
                                 msgId,
                                 msgConvId,
@@ -814,22 +839,47 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 log(f"[!] Failed to process message {msgId}: {e}", 3)
 
         # Append to the csv files
-        if not write_csv_file(args.output / "messages.csv", MESSAGES_HEADERS, messages_rows):
-            log("[!] Failed to write to the messages CSV file")
-        if not write_csv_file(args.output / "messages_statuses.csv", MSGS_STATUSES_HEADERS, msgs_statuses_rows):
-            log("[!] Failed to write to the messages statuses CSV file")
-        if not write_csv_file(
-            args.output / "messages_version_histories.csv", MSGS_VERSION_HISTS_HEADERS, msgs_version_hists_rows
-        ):
-            log("[!] Failed to write to the messages version histories CSV file")
-        if not write_csv_file(args.output / "messages_reactions.csv", MSGS_REACTIONS_HEADERS, msgs_reactions_rows):
-            log("[!] Failed to write to the messages reactions CSV file")
-        if not write_csv_file(
-            args.output / "messages_attachments.csv", MSGS_ATTACHMENTS_HEADERS, msgs_attachments_rows
-        ):
-            log("[!] Failed to write to the messages attachments CSV file")
-        if not write_csv_file(args.output / "groups_changes.csv", GROUPS_CHANGES_HEADERS, groups_changes_rows):
-            log("[!] Failed to write to the groups changes CSV file")
+        for kConvId in convIdKeys:
+            if not kConvId in messages_rows and not kConvId in groups_changes_rows:
+                continue
+            reportFolder = args.output
+            suffix = ""
+            if not args.merge_conversations:
+                reportFolder = reportFolder / kConvId
+                suffix = "_" + kConvId
+                reportFolder.mkdir(parents=True, exist_ok=True)
+
+            if not write_csv_file(reportFolder / f"messages{suffix}.csv", MESSAGES_HEADERS, messages_rows[kConvId]):
+                log("[!] Failed to write to the messages CSV file")
+
+            if not write_csv_file(
+                reportFolder / f"messages_statuses{suffix}.csv", MSGS_STATUSES_HEADERS, msgs_statuses_rows[kConvId]
+            ):
+                log("[!] Failed to write to the messages statuses CSV file")
+
+            if not write_csv_file(
+                reportFolder / f"messages_version_histories{suffix}.csv",
+                MSGS_VERSION_HISTS_HEADERS,
+                msgs_version_hists_rows[kConvId],
+            ):
+                log("[!] Failed to write to the messages version histories CSV file")
+
+            if not write_csv_file(
+                reportFolder / f"messages_reactions{suffix}.csv", MSGS_REACTIONS_HEADERS, msgs_reactions_rows[kConvId]
+            ):
+                log("[!] Failed to write to the messages reactions CSV file")
+
+            if not write_csv_file(
+                reportFolder / f"messages_attachments{suffix}.csv",
+                MSGS_ATTACHMENTS_HEADERS,
+                msgs_attachments_rows[kConvId],
+            ):
+                log("[!] Failed to write to the messages attachments CSV file")
+
+            if not write_csv_file(
+                reportFolder / f"groups_changes{suffix}.csv", GROUPS_CHANGES_HEADERS, groups_changes_rows[kConvId]
+            ):
+                log("[!] Failed to write to the groups changes CSV file")
 
         # Free memory
         messages_rows.clear()
@@ -838,6 +888,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         msgs_reactions_rows.clear()
         msgs_attachments_rows.clear()
         groups_changes_rows.clear()
+        convIdKeys.clear()
 
 
 def export_attachments(cursor, args: argparse.Namespace):
