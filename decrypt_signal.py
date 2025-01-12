@@ -428,6 +428,19 @@ def fetch_batches_select(cursor, statement, batch_size=10000):
 def process_database_and_write_reports(cursor, args: argparse.Namespace):
 
     log("[i] Processing the database...", 1)
+
+    user_uuid = None
+    try:
+        cursor.execute("SELECT json FROM items WHERE id = 'uuid_id';")
+        row = cursor.fetchone()
+        if row is None:
+            log(f"[i] User's Service ID not found in items table", 1)
+        user_uuid = json.loads(row[0]).get("value", None)
+        if user_uuid is not None:
+            user_uuid = user_uuid.split(".")[0]
+    except sqlcipher3.DatabaseError as e:
+        raise sqlcipher3.DatabaseError("Failed to retrieve items from database") from e
+
     conversations = select_sql(
         cursor,
         "SELECT id, json, type, active_at, serviceId, profileFullName, e164 FROM conversations;",
@@ -961,8 +974,8 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         for call in call_history:
             callId, peerId, ringerId, mode, callType, direction, status, timestamp, startedById, endedTimestamp = call
             peerName = service2name.get(peerId, "") if mode == "Direct" else group2name.get(peerId, "")
-            if mode == "Direct" and direction == "Incoming":
-                ringerId = peerId
+            if mode == "Direct":
+                ringerId = peerId if direction == "Incoming" else user_uuid
             ringerName = service2name.get(ringerId, service2name.get(startedById, ""))
 
             calls_rows.append(
