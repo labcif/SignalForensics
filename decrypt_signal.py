@@ -463,7 +463,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Added By",
         "Avatar Path",
     ]
-    CONTACTS_HEADERS = ["Conversation ID", "Name", "E164", "Profile Name", "Service ID"]
+    CONTACTS_HEADERS = ["Conversation ID", "Service ID", "Name", "E164", "Profile Name", "Nickname", "Note"]
     GROUPS_MEMBERS_HEADERS = [
         "Conversation ID",
         "Group Name",
@@ -583,7 +583,20 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         convDraft = print_mentions_in_message(convJson.get("draft", None), convJson.get("draftBodyRanges", None))
 
         if convType == "private":
-            contacts_rows.append([convId, convJson.get("name", ""), e164, profileFullName, serviceId])
+            cNotes = convJson.get("notes", None)
+            cNickname = convJson.get("nicknameGivenName", "") + " " + convJson.get("nicknameFamilyName", "")
+            cNickname = cNickname.strip()
+            contacts_rows.append(
+                [
+                    convId,
+                    serviceId,
+                    convJson.get("name", ""),
+                    e164,
+                    profileFullName,
+                    None if cNickname == "" else cNickname,
+                    cNotes,
+                ]
+            )
         elif convType == "group":
             process_group_members(convId, convJson)
 
