@@ -550,7 +550,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             if mbrKey not in convJson:
                 continue
             for member in convJson[mbrKey]:
-                mbrServiceId = member["aci"]
+                mbrServiceId = member.get("aci", member.get("serviceId", None))
                 role = "Administrator" if member.get("role", None) == 2 else None
                 group_members_rows.append(
                     [
@@ -596,7 +596,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         convDraft = print_mentions_in_message(convJson.get("draft", None), convJson.get("draftBodyRanges", None))
 
         if convType == "private":
-            cNotes = convJson.get("notes", None)
+            cNote = convJson.get("note", None)
             cNickname = convJson.get("nicknameGivenName", "") + " " + convJson.get("nicknameFamilyName", "")
             cNickname = cNickname.strip()
             contacts_rows.append(
@@ -607,7 +607,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                     e164,
                     profileFullName,
                     None if cNickname == "" else cNickname,
-                    cNotes,
+                    cNote,
                 ]
             )
         elif convType == "group":
