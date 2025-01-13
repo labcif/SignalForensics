@@ -564,6 +564,63 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                     ]
                 )
 
+    # Details to details text
+    def details_to_text(details):
+        if details is None or "type" not in details:
+            return None
+        dType = details["type"]
+        dRemoved = details.get("removed", None)
+
+        dNewPriv = details.get("newPrivilege", None)
+        newPrivSuffix = " to Admin only" if dNewPriv == 3 else " to All members" if dNewPriv == 1 else ""
+
+        def get_mbr_suffix():
+            mbrServiceId = details.get("aci", None)
+            mbrName = service2name.get(mbrServiceId, "")
+            return f"{mbrName} (Service ID: {mbrServiceId})"
+
+        if dType == "create":
+            return "Group created"
+        elif dType == "title":
+            return f"Group title changed to '{details.get('newTitle', '')}'"
+        elif dType == "description":
+            if not dRemoved:
+                return f"Group description changed to '{details.get('description', '')}'"
+            return "Group description removed"
+        elif dType == "group-link-add":
+            dPriv = details.get("privilege", None)
+            if dPriv != 1 and dPriv != 3:
+                return "Group join link enabled"
+            # 1 = without admin approval, 3 = with admin approval
+            return f"Group join link enabled {'without' if dPriv == 1 else 'with'} admin approval"
+        elif dType == "group-link-reset":
+            return "Group join link reset"
+        elif dType == "group-link-remove":
+            return "Group join link disabled"
+        elif dType == "access-invite-link":
+            # 3 = enabled, 1 = disabled
+            return f"Admin approval {'enabled' if dNewPriv == 3 else 'disabled'} for group join link"
+        elif dType == "access-members":
+            return f"Permission to add/remove members changed{newPrivSuffix}"
+        elif dType == "access-attributes":
+            return f"Permission to modify group information changed{newPrivSuffix}"
+        elif dType == "announcements-only":
+            if details.get("announcementsOnly", False):
+                return "Group set to announcements only (only admins can send messages)"
+            return "Group set to allow all members to send messages"
+        elif dType == "avatar":
+            if dRemoved:
+                return "Group avatar removed"
+            return "Group avatar changed"
+        elif dType == "member-add":
+            return f"Member added: {get_mbr_suffix()}"
+        elif dType == "member-remove":
+            return f"Member removed: {get_mbr_suffix()}"
+        elif dType == "member-privilege":
+            return f"Member role updated to {'Admin' if dNewPriv == 2 else 'Member'} for {get_mbr_suffix()}"
+
+        return 'Uknown group change check "Details in JSON" for more information'
+
     # Populate the service2name dictionary
     for conv in conversations:
         (convId, convJsonStr, convType, convActiveAt, serviceId, profileFullName, e164) = conv[:7]
@@ -695,6 +752,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Author's Name",
         "Type",
         "Details",
+        "Details in JSON",
         "Author's Service ID",
     ]  # TODO: Details -> Something better
 
@@ -868,6 +926,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
 
                     for gcDetail in gcDetails:
                         gcType = gcDetail.get("type", None)
+                        detailsText = details_to_text(gcDetail)
 
                         groups_changes_rows[convIdKey].append(
                             [
@@ -878,7 +937,8 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                                 tts(msgJson.get("received_at_ms", None)),
                                 msgAuthor,
                                 gcType,
-                                json.dumps(gcDetails),
+                                detailsText,
+                                json.dumps(gcDetail) if gcDetail is not None else None,
                                 msgAuthorServiceId,
                             ]
                         )
