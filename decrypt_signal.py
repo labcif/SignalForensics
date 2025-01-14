@@ -381,23 +381,6 @@ def open_sqlcipher_db(args: argparse.Namespace, key: bytes):
     return conn, cursor
 
 
-def write_csv_file(path, headers, rows):
-    if len(rows) == 0:
-        return True
-    try:
-        fileExists = path.is_file()
-        with open(path, "a", newline="", encoding="utf-8") as csvfile:
-            writer = csv.writer(csvfile, delimiter=",")
-            if not fileExists:
-                csvfile.write("SEP=,\n")
-                writer.writerow(headers)
-            writer.writerows(rows)
-    except Exception as e:
-        log(f"[!] Failed to write CSV file: {e}")
-        return False
-    return True
-
-
 def select_sql(cursor, statement, name=None):
     if name is not None:
         log(f"[i] Fetching all {name}...", 2)
@@ -425,10 +408,166 @@ def fetch_batches_select(cursor, statement, batch_size=10000):
             break
 
 
+def export_attachments(cursor, args: argparse.Namespace):
+    """Export Signal attachments from the database."""
+
+    attachments_dir = args.output / "attachments"
+    attachments_dir.mkdir(parents=True, exist_ok=True)
+
+    # Fetch message attachments
+    messages = select_sql(
+        cursor,
+        "SELECT json from messages WHERE hasFileAttachments = TRUE OR hasAttachments = TRUE OR json LIKE '%\"preview\":[{%';",
+        "attachment metadata",
+    )
+
+    # Process each attachment
+    all_attachments = []
+
+    if len(messages) == 0:
+        log("[i] No attachments were found in the database")
+    else:
+        for entry in messages:
+            # Parse the message metadata
+            msgJson = json.loads(entry[0])
+            attachments = msgJson.get("attachments", [])
+
+            # Preview of embed urls
+            if "preview" in msgJson and "image" in msgJson["preview"]:
+                attachments.append(msgJson["preview"]["image"])
+
+            all_attachments.extend(attachments)
+
+    del messages  # Free memory
+
+    # Fetch group and contact avatars
+    conversations = select_sql(
+        cursor,
+        "SELECT json, type FROM conversations;",
+        "conversations",
+    )
+
+    if len(conversations) == 0:
+        log("[i] No conversations were found in the database")
+    else:
+        withAvatar = 0
+        for conv in conversations:
+            convJsonStr, convType = conv
+            convJson = json.loads(convJsonStr)
+            for avatar in handle_avatar(convJson, convType):
+                avatar["contentType"] = "image/jpeg"
+                all_attachments.append(avatar)
+                withAvatar += 1
+
+        log(f"[i] Found {withAvatar} conversation avatars metadata", 2)
+
+    del conversations
+
+    if len(all_attachments) == 0:
+        return
+
+    # Process the retrieved attachments
+    log("[i] Processing metadata and decrypting attachments...", 2)
+    counts = 0
+    error = 0
+    integrity_error = 0
+    for attachment in all_attachments:
+        subpath = attachment["path"]
+        try:
+            # Fetch attachment crypto data
+            key = base64.b64decode(attachment["localKey"])[:32]
+            nonce = base64.b64decode(attachment["iv"])
+            size = int(attachment["size"])
+
+            # Encrypted attachment path
+            folder = "attachments.noindex" if "imagePath" not in attachment else "avatars.noindex"
+            enc_attachment_path = args.dir / folder / subpath
+
+            # Check if the encrypted attachment is present on the expected path
+            if not enc_attachment_path.is_file():
+                log(f"[!] Attachment {subpath} not found", 2)
+                error += 1
+                continue
+
+            # Fetch attachment cipherdata
+            with enc_attachment_path.open("rb") as f:
+                enc_attachment_data = f.read()
+
+            # Decrypt the attachment
+            attachment_data = aes_256_cbc_decrypt(key, nonce, enc_attachment_data)
+            attachment_data = attachment_data[16 : 16 + size]  # Dismiss the first 16 bytes and the padding
+            if bytes.fromhex(attachment["plaintextHash"]) != hash_sha256(attachment_data):
+                log(f"[!] Attachment {subpath} failed integrity check", 2)
+                integrity_error += 1
+
+            # Save the attachment to a file
+            filePath = subpath
+            if "contentType" in attachment:
+                filePath += f"{mime_to_extension(attachment['contentType'])}"
+
+            # Ensure the parent directory exists
+            attachment_path = attachments_dir / filePath
+            attachment_path.parent.mkdir(parents=True, exist_ok=True)
+            with attachment_path.open("wb") as f:
+                f.write(attachment_data)
+
+            counts += 1
+        except Exception as e:
+            error += 1
+            log(f"[!] Failed to export attachment {subpath}: {e}", 3)
+            raise e
+
+    log(f"[i] Exported {counts} attachments")
+    if integrity_error > 0:
+        log(f"[!] {integrity_error} attachments failed integrity check")
+    if error > 0:
+        log(f"[!] Failed to export {error} attachments")
+
+
+####################### CSV REPORTS #######################
+
+
+def write_csv_file(path, headers, rows):
+    """Writes a CSV file with the provided headers and rows."""
+    if len(rows) == 0:
+        return True
+    try:
+        fileExists = path.is_file()
+        with open(path, "a", newline="", encoding="utf-8") as csvfile:
+            writer = csv.writer(csvfile, delimiter=",")
+            if not fileExists:
+                csvfile.write("SEP=,\n")
+                writer.writerow(headers)
+            writer.writerows(rows)
+    except Exception as e:
+        log(f"[!] Failed to write CSV file: {e}")
+        return False
+    return True
+
+
+def handle_avatar(convJson, convType):
+    """Yields the avatars in a conversation JSON."""
+    keyName = "avatar" if convType == "group" else "profileAvatar"
+    theAvatar = convJson.get(keyName, None)
+    theAvatars = convJson.get("avatars", [])
+    if theAvatar is not None:
+        theAvatars.insert(0, theAvatar)
+    for avatar in theAvatars:
+        if avatar.get("localKey", None) is not None:
+            avatar["iv"] = "AAAAAAAAAAAAAAAAAAAAAA=="
+            imgPath = avatar.get("imagePath", None)
+            if imgPath is not None:
+                avatar["path"] = imgPath
+            yield avatar
+    return
+
+
 def process_database_and_write_reports(cursor, args: argparse.Namespace):
+    """Write reports from the artifacts found in the database"""
 
     log("[i] Processing the database...", 1)
 
+    # Fetch the user's service ID
     user_uuid = None
     try:
         cursor.execute("SELECT json FROM items WHERE id = 'uuid_id';")
@@ -441,6 +580,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     except sqlcipher3.DatabaseError as e:
         raise sqlcipher3.DatabaseError("Failed to retrieve items from database") from e
 
+    # Fetch conversations
     conversations = select_sql(
         cursor,
         "SELECT id, json, type, active_at, serviceId, profileFullName, e164 FROM conversations;",
@@ -496,8 +636,9 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     conv2group = {}  # Dictionary of conversation ID to group ID
     convId2conv = {}  # Dictionary of conversation ID to name and type
 
-    # Print mentions in the message
+    # Auxiliary functions
     def print_mentions_in_message(text, bodyRanges):
+        """Prints mentions in the message."""
         if bodyRanges is None or text is None or type(bodyRanges) is not list:
             return text
 
@@ -519,16 +660,16 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             newText += "@" + mention.get("replacementText", service2name.get(mention["mentionAci"], "unknown"))
         return newText
 
-    # Process the message body ranges
     def process_message_bodyranges(msgJson, keyBodyRanges="bodyRanges", keyBody="body"):
+        """Process a message's body ranges."""
         msgBodyRanges = msgJson.get(keyBodyRanges, [])
         msgBody = msgJson.get(keyBody, None)
         if len(msgBodyRanges) > 0:
             msgBody = print_mentions_in_message(msgBody, msgBodyRanges)
         return msgBody
 
-    # Process the last message with prefix and mentions.
     def process_last_message(convJson):
+        """Process the last message in a conversation."""
         last_message = print_mentions_in_message(
             convJson.get("lastMessage", None), convJson.get("lastMessageBodyRanges", None)
         )
@@ -537,9 +678,8 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             last_message = f"{prefix} {last_message}"
         return last_message
 
-    # Process group members and add to group_members_rows.
     def process_group_members(convId, convJson):
-        # TODO: """Process group members and add to group_members_rows."""
+        """Process group members and add to group_members_rows."""
         MEMBER_KEYS = {
             "membersV2": "Member",
             "pendingMembersV2": "Pending Member",
@@ -564,8 +704,8 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                     ]
                 )
 
-    # Details to details text
     def details_to_text(details):
+        """Converts group change details to a readable string."""
         if details is None or "type" not in details:
             return None
         dType = details["type"]
@@ -1057,140 +1197,12 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             log("[!] Failed to write the calls CSV file")
 
 
-def handle_avatar(convJson, convType):
-    keyName = "avatar" if convType == "group" else "profileAvatar"
-    theAvatar = convJson.get(keyName, None)
-    theAvatars = convJson.get("avatars", [])
-    if theAvatar is not None:
-        theAvatars.insert(0, theAvatar)
-    for avatar in theAvatars:
-        if avatar.get("localKey", None) is not None:
-            avatar["iv"] = "AAAAAAAAAAAAAAAAAAAAAA=="
-            imgPath = avatar.get("imagePath", None)
-            if imgPath is not None:
-                avatar["path"] = imgPath
-            yield avatar
-    return
-
-
-def export_attachments(cursor, args: argparse.Namespace):
-    attachments_dir = args.output / "attachments"
-    attachments_dir.mkdir(parents=True, exist_ok=True)
-
-    # Fetch all attachment data
-    messages = select_sql(
-        cursor,
-        "SELECT json from messages WHERE hasFileAttachments = TRUE OR hasAttachments = TRUE OR json LIKE '%\"preview\":[{%';",
-        "attachment metadata",
-    )
-
-    # Process each attachment
-    all_attachments = []
-
-    if len(messages) == 0:
-        log("[i] No attachments were found in the database")
-    else:
-        for entry in messages:
-            # Parse the message metadata
-            msgJson = json.loads(entry[0])
-            attachments = msgJson.get("attachments", [])
-
-            # Preview of embed urls
-            if "preview" in msgJson and "image" in msgJson["preview"]:
-                attachments.append(msgJson["preview"]["image"])
-
-            all_attachments.extend(attachments)
-
-    del messages  # Free memory
-
-    # Fetch conversation data
-    conversations = select_sql(
-        cursor,
-        "SELECT json, type FROM conversations;",
-        "conversations",
-    )
-
-    if len(conversations) == 0:
-        log("[i] No conversations were found in the database")
-    else:
-        withAvatar = 0
-        for conv in conversations:
-            convJsonStr, convType = conv
-            convJson = json.loads(convJsonStr)
-            for avatar in handle_avatar(convJson, convType):
-                avatar["contentType"] = "image/jpeg"
-                all_attachments.append(avatar)
-                withAvatar += 1
-
-        log(f"[i] Found {withAvatar} conversation avatars metadata", 2)
-
-    del conversations
-
-    if len(all_attachments) == 0:
-        return
-
-    # For each attachment in the message
-    log("[i] Processing metadata and decrypting attachments...", 2)
-    counts = 0
-    error = 0
-    integrity_error = 0
-    for attachment in all_attachments:
-        subpath = attachment["path"]
-        try:
-            # Fetch attachment crypto data
-            key = base64.b64decode(attachment["localKey"])[:32]
-            nonce = base64.b64decode(attachment["iv"])
-            size = int(attachment["size"])
-
-            # Encrypted attachment path
-            folder = "attachments.noindex" if "imagePath" not in attachment else "avatars.noindex"
-            enc_attachment_path = args.dir / folder / subpath
-
-            # Check if the encrypted attachment is present on the expected path
-            if not enc_attachment_path.is_file():
-                log(f"[!] Attachment {subpath} not found", 2)
-                error += 1
-                continue
-
-            # Fetch attachment cipherdata
-            with enc_attachment_path.open("rb") as f:
-                enc_attachment_data = f.read()
-
-            # Decrypt the attachment
-            attachment_data = aes_256_cbc_decrypt(key, nonce, enc_attachment_data)
-            attachment_data = attachment_data[16 : 16 + size]  # Dismiss the first 16 bytes and the padding
-            if bytes.fromhex(attachment["plaintextHash"]) != hash_sha256(attachment_data):
-                log(f"[!] Attachment {subpath} failed integrity check", 2)
-                integrity_error += 1
-
-            # Save the attachment to a file
-            filePath = subpath
-            if "contentType" in attachment:
-                filePath += f"{mime_to_extension(attachment['contentType'])}"
-
-            # Ensure the parent directory exists
-            attachment_path = attachments_dir / filePath
-            attachment_path.parent.mkdir(parents=True, exist_ok=True)
-            with attachment_path.open("wb") as f:
-                f.write(attachment_data)
-
-            counts += 1
-        except Exception as e:
-            error += 1
-            log(f"[!] Failed to export attachment {subpath}: {e}", 3)
-            raise e
-
-    log(f"[i] Exported {counts} attachments")
-    if integrity_error > 0:
-        log(f"[!] {integrity_error} attachments failed integrity check")
-    if error > 0:
-        log(f"[!] Failed to export {error} attachments")
-
-
 ####################### MISC HELPER FUNCTIONS #######################
 
 
+# Converts a timestamp to a localized string
 def localize_timestamp(timestamp, args: argparse.Namespace, ms=True):
+    """Converts a timestamp to a localized string."""
     tzStr = args.convert_timestamps
     if not tzStr:
         return timestamp
@@ -1205,16 +1217,19 @@ def localize_timestamp(timestamp, args: argparse.Namespace, ms=True):
 
 
 def generate_db_name(length=8, prefix="signal"):
+    """Generates a random database name."""
     return f"{prefix}_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 
 def mime_to_extension(mime_type):
+    """Converts a MIME type to a file extension."""
     extension = mimetypes.guess_extension(mime_type)
     return extension
 
 
 ####################### HEADER #######################
 def print_config(args: argparse.Namespace):
+    """Prints the script's current configuration."""
     log("----------------------==<[ CONFIG ]>==----------------------")
     log(f"Mode: {args.mode}")
     log(f"Signal Directory: {args.dir}")
