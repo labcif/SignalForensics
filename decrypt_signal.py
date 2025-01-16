@@ -408,11 +408,30 @@ def fetch_batches_select(cursor, statement, batch_size=10000):
             break
 
 
+EMPTY_IV = "AAAAAAAAAAAAAAAAAAAAAA=="
+
+
+def handle_avatar(convJson, convType):
+    """Yields the avatars in a conversation JSON."""
+    keyName = "avatar" if convType == "group" else "profileAvatar"
+    theAvatar = convJson.get(keyName, None)
+    theAvatars = convJson.get("avatars", [])
+    if theAvatar is not None:
+        theAvatars.insert(0, theAvatar)
+    for avatar in theAvatars:
+        if avatar.get("localKey", None) is not None:
+            avatar["iv"] = EMPTY_IV
+            imgPath = avatar.get("imagePath", None)
+            if imgPath is not None:
+                avatar["path"] = imgPath
+            yield avatar
+    return
+
+
 def export_attachments(cursor, args: argparse.Namespace):
     """Export Signal attachments from the database."""
 
-    attachments_dir = args.output / "attachments"
-    attachments_dir.mkdir(parents=True, exist_ok=True)
+    attachments_dir = args.output
 
     # Fetch message attachments
     messages = select_sql(
@@ -440,7 +459,7 @@ def export_attachments(cursor, args: argparse.Namespace):
 
     del messages  # Free memory
 
-    # Fetch group and contact avatars
+    # Fetch conversation avatars and draft attachments
     conversations = select_sql(
         cursor,
         "SELECT json, type FROM conversations;",
@@ -451,15 +470,23 @@ def export_attachments(cursor, args: argparse.Namespace):
         log("[i] No conversations were found in the database")
     else:
         withAvatar = 0
+        draftAttachments = 0
         for conv in conversations:
             convJsonStr, convType = conv
             convJson = json.loads(convJsonStr)
             for avatar in handle_avatar(convJson, convType):
                 avatar["contentType"] = "image/jpeg"
+                avatar["path_pref"] = "attachments.noindex" if "imagePath" not in avatar else "avatars.noindex"
                 all_attachments.append(avatar)
                 withAvatar += 1
+            for atch in convJson.get("draftAttachments", []):
+                atch["iv"] = EMPTY_IV
+                atch["path_pref"] = "drafts.noindex"
+                all_attachments.append(atch)
+                draftAttachments += 1
 
-        log(f"[i] Found {withAvatar} conversation avatars metadata", 2)
+        log(f"[i] Found {withAvatar} conversation avatars", 2)
+        log(f"[i] Found {draftAttachments} draft attachments", 2)
 
     del conversations
 
@@ -480,7 +507,7 @@ def export_attachments(cursor, args: argparse.Namespace):
             size = int(attachment["size"])
 
             # Encrypted attachment path
-            folder = "attachments.noindex" if "imagePath" not in attachment else "avatars.noindex"
+            folder = "attachments.noindex" if "path_pref" not in attachment else attachment["path_pref"]
             enc_attachment_path = args.dir / folder / subpath
 
             # Check if the encrypted attachment is present on the expected path
@@ -506,7 +533,7 @@ def export_attachments(cursor, args: argparse.Namespace):
                 filePath += f"{mime_to_extension(attachment['contentType'])}"
 
             # Ensure the parent directory exists
-            attachment_path = attachments_dir / filePath
+            attachment_path = attachments_dir / folder / filePath
             attachment_path.parent.mkdir(parents=True, exist_ok=True)
             with attachment_path.open("wb") as f:
                 f.write(attachment_data)
@@ -545,25 +572,11 @@ def write_csv_file(path, headers, rows):
     return True
 
 
-def handle_avatar(convJson, convType):
-    """Yields the avatars in a conversation JSON."""
-    keyName = "avatar" if convType == "group" else "profileAvatar"
-    theAvatar = convJson.get(keyName, None)
-    theAvatars = convJson.get("avatars", [])
-    if theAvatar is not None:
-        theAvatars.insert(0, theAvatar)
-    for avatar in theAvatars:
-        if avatar.get("localKey", None) is not None:
-            avatar["iv"] = "AAAAAAAAAAAAAAAAAAAAAA=="
-            imgPath = avatar.get("imagePath", None)
-            if imgPath is not None:
-                avatar["path"] = imgPath
-            yield avatar
-    return
-
-
 def process_database_and_write_reports(cursor, args: argparse.Namespace):
     """Write reports from the artifacts found in the database"""
+
+    reports_folder = args.output / "reports"
+    reports_folder.mkdir(parents=True, exist_ok=True)
 
     log("[i] Processing the database...", 1)
 
@@ -835,11 +848,11 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         )
 
     # Write the csv files
-    if not write_csv_file(args.output / "conversations.csv", CONVERSATIONS_HEADERS, conv_rows):
+    if not write_csv_file(reports_folder / "conversations.csv", CONVERSATIONS_HEADERS, conv_rows):
         log("[!] Failed to write the conversations CSV file")
-    if not write_csv_file(args.output / "contacts.csv", CONTACTS_HEADERS, contacts_rows):
+    if not write_csv_file(reports_folder / "contacts.csv", CONTACTS_HEADERS, contacts_rows):
         log("[!] Failed to write the contacts CSV file")
-    if not write_csv_file(args.output / "groups_members.csv", GROUPS_MEMBERS_HEADERS, group_members_rows):
+    if not write_csv_file(reports_folder / "groups_members.csv", GROUPS_MEMBERS_HEADERS, group_members_rows):
         log("[!] Failed to write the groups members CSV file")
 
     # Free memory
@@ -1090,7 +1103,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         for kConvId in convIdKeys:
             if not kConvId in messages_rows and not kConvId in groups_changes_rows:
                 continue
-            reportFolder = args.output
+            reportFolder = reports_folder
             suffix = ""
             if not args.merge_conversations:
                 reportFolder = reportFolder / kConvId
@@ -1193,7 +1206,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                     ringerId,
                 ]
             )
-        if not write_csv_file(args.output / "calls_history.csv", CALLS_HEADERS, calls_rows):
+        if not write_csv_file(reports_folder / "calls_history.csv", CALLS_HEADERS, calls_rows):
             log("[!] Failed to write the calls CSV file")
 
 
