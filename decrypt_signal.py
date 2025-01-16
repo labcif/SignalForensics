@@ -28,6 +28,12 @@ DEC_KEY_PREFIX = "v10"
 
 DPAPI_BLOB_GUID = uuid.UUID("df9d8cd0-1501-11d1-8c7a-00c04fc297eb")
 
+EMPTY_IV = "AAAAAAAAAAAAAAAAAAAAAA=="  # 16 bytes of 0x00
+
+ATTACHMENT_FOLDER = pathlib.Path("attachments.noindex")
+AVATARS_FOLDER = pathlib.Path("avatars.noindex")
+DRAFTS_FOLDER = pathlib.Path("drafts.noindex")
+
 ####################### EXCEPTIONS #######################
 
 
@@ -408,9 +414,6 @@ def fetch_batches_select(cursor, statement, batch_size=10000):
             break
 
 
-EMPTY_IV = "AAAAAAAAAAAAAAAAAAAAAA=="
-
-
 def handle_avatar(convJson, convType):
     """Yields the avatars in a conversation JSON."""
     keyName = "avatar" if convType == "group" else "profileAvatar"
@@ -422,6 +425,7 @@ def handle_avatar(convJson, convType):
         if avatar.get("localKey", None) is not None:
             avatar["iv"] = EMPTY_IV
             imgPath = avatar.get("imagePath", None)
+            avatar["path_pref"] = AVATARS_FOLDER if imgPath else ATTACHMENT_FOLDER
             if imgPath is not None:
                 avatar["path"] = imgPath
             yield avatar
@@ -476,12 +480,11 @@ def export_attachments(cursor, args: argparse.Namespace):
             convJson = json.loads(convJsonStr)
             for avatar in handle_avatar(convJson, convType):
                 avatar["contentType"] = "image/jpeg"
-                avatar["path_pref"] = "attachments.noindex" if "imagePath" not in avatar else "avatars.noindex"
                 all_attachments.append(avatar)
                 withAvatar += 1
             for atch in convJson.get("draftAttachments", []):
                 atch["iv"] = EMPTY_IV
-                atch["path_pref"] = "drafts.noindex"
+                atch["path_pref"] = DRAFTS_FOLDER
                 all_attachments.append(atch)
                 draftAttachments += 1
 
@@ -507,7 +510,7 @@ def export_attachments(cursor, args: argparse.Namespace):
             size = int(attachment["size"])
 
             # Encrypted attachment path
-            folder = "attachments.noindex" if "path_pref" not in attachment else attachment["path_pref"]
+            folder = ATTACHMENT_FOLDER if "path_pref" not in attachment else attachment["path_pref"]
             enc_attachment_path = args.dir / folder / subpath
 
             # Check if the encrypted attachment is present on the expected path
@@ -624,6 +627,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Last Message",
         "Last Message Deleted?",
         "Draft Message",
+        "Draft Attachments",
         "Expire Timer (seconds)",
         "Is Archived?",
         "Added By",
@@ -796,15 +800,23 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         (convId, convJsonStr, convType, convActiveAt, serviceId, profileFullName, e164) = conv[:7]
         convJson = json.loads(convJsonStr)
 
-        avatarPathParts = [avatar.get("path", None) for avatar in handle_avatar(convJson, convType)]
+        avatarPathParts = [
+            str(avatar["path_pref"] / avatar["path"])
+            for avatar in handle_avatar(convJson, convType)
+            if "path" in avatar
+        ]
         if len(avatarPathParts) > 1:
             avatarPathParts[0] += " (CURRENT)"
 
-        avatarPath = "\n".join(filter(None, avatarPathParts))
+        avatarPath = "\n".join(filter(None, avatarPathParts)) if len(avatarPathParts) > 0 else None
 
         convLastMsg = process_last_message(convJson)
         convDraft = print_mentions_in_message(convJson.get("draft", None), convJson.get("draftBodyRanges", None))
-
+        convDraftAttachments = convJson.get("draftAttachments", [])
+        convDraftAttachments = [entry["path"] for entry in convDraftAttachments if "path" in entry]
+        convDraftAttachmentsStr = (
+            "\n".join(filter(None, convDraftAttachments)) if len(convDraftAttachments) > 0 else None
+        )
         if convType == "private":
             cNote = convJson.get("note", None)
             cNickname = convJson.get("nicknameGivenName", "") + " " + convJson.get("nicknameFamilyName", "")
@@ -840,6 +852,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 convLastMsg,
                 convJson.get("lastMessageDeletedForEveryone", None),
                 convDraft,
+                convDraftAttachmentsStr,
                 convJson.get("expireTimer", None),  # REVIEW: Keep in seconds?
                 convJson.get("isArchived", False),
                 service2name.get(added_by, None),
