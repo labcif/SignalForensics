@@ -383,12 +383,12 @@ def open_sqlcipher_db(args: argparse.Namespace, key: bytes):
 
 def select_sql(cursor, statement, name=None):
     if name is not None:
-        log(f"[i] Fetching all {name}...", 2)
+        log(f"Fetching all {name}...", 2)
     try:
         cursor.execute(statement)
         arr = cursor.fetchall()
         if name is not None:
-            log(f"[i] Found {len(arr)} {name}", 1)
+            log(f"Found {len(arr)} {name}", 1)
         return arr
     except sqlcipher3.DatabaseError as e:
         raise sqlcipher3.DatabaseError("Failed to execute SQL SELECT (", statement, ")") from e
