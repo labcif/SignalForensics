@@ -631,8 +631,10 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Draft Attachments",
         "Expire Timer (seconds)",
         "Is Archived?",
-        "Added By",
         "Avatar Path",
+        "Added To Group By (ID)",
+        "Added To Group By (Name)",
+        "Group Description",
     ]
     CONTACTS_HEADERS = ["Conversation ID", "Service ID", "Name", "E164", "Profile Name", "Nickname", "Note"]
     GROUPS_MEMBERS_HEADERS = [
@@ -858,8 +860,10 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 convDraftAttachmentsStr,
                 convJson.get("expireTimer", None),  # REVIEW: Keep in seconds?
                 convJson.get("isArchived", False),
-                service2name.get(added_by, None),
                 avatarPath,
+                added_by,
+                service2name.get(added_by, None),
+                convJson.get("description", ""),
             ]
         )
 
