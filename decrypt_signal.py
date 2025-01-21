@@ -626,6 +626,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Last Message Author",
         "Last Message",
         "Last Message Deleted?",
+        "Draft Timestamp",
         "Draft Message",
         "Draft Attachments",
         "Expire Timer (seconds)",
@@ -811,6 +812,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         avatarPath = "\n".join(filter(None, avatarPathParts)) if len(avatarPathParts) > 0 else None
 
         convLastMsg = process_last_message(convJson)
+        convDraftTimestamp = tts(convJson.get("draftTimestamp", None))
         convDraft = print_mentions_in_message(convJson.get("draft", None), convJson.get("draftBodyRanges", None))
         convDraftAttachments = convJson.get("draftAttachments", [])
         convDraftAttachments = [entry["path"] for entry in convDraftAttachments if "path" in entry]
@@ -851,6 +853,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 convJson.get("lastMessageAuthor", None),
                 convLastMsg,
                 convJson.get("lastMessageDeletedForEveryone", None),
+                convDraftTimestamp,
                 convDraft,
                 convDraftAttachmentsStr,
                 convJson.get("expireTimer", None),  # REVIEW: Keep in seconds?
