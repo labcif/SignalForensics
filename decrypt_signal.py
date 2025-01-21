@@ -1186,6 +1186,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         CALLS_HEADERS = [
             "Call ID",
             "Peer's Name",
+            "Call Initiator's Name",
             "Ringer's Name",
             "Mode",
             "Type",
@@ -1194,6 +1195,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             "Timestamp",
             "Ended Timestamp",
             "Peer's ID",
+            "Call Initiator's ID",
             "Ringer's ID",
         ]
         calls_rows = []
@@ -1202,12 +1204,14 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             peerName = service2name.get(peerId, "") if mode == "Direct" else group2name.get(peerId, "")
             if mode == "Direct":
                 ringerId = peerId if direction == "Incoming" else user_uuid
-            ringerName = service2name.get(ringerId, service2name.get(startedById, ""))
+            callInitiatorName = service2name.get(startedById, "")
+            ringerName = service2name.get(ringerId, "")
 
             calls_rows.append(
                 [
                     str(callId),
                     peerName,
+                    callInitiatorName,
                     ringerName,
                     mode,
                     callType,
@@ -1216,6 +1220,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                     tts(timestamp),
                     tts(endedTimestamp),
                     peerId,
+                    startedById,
                     ringerId,
                 ]
             )
