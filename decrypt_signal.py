@@ -636,7 +636,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Added To Group By (Name)",
         "Group Description",
     ]
-    CONTACTS_HEADERS = ["Conversation ID", "Service ID", "Name", "E164", "Profile Name", "Nickname", "Note"]
+    CONTACTS_HEADERS = ["Conversation ID", "Service ID", "Name", "E164", "Username", "Profile Name", "Nickname", "Note"]
     GROUPS_MEMBERS_HEADERS = [
         "Conversation ID",
         "Group Name",
@@ -732,7 +732,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         dRemoved = details.get("removed", None)
 
         dNewPriv = details.get("newPrivilege", None)
-        newPrivSuffix = " to Admin only" if dNewPriv == 3 else " to All members" if dNewPriv == 1 else ""
+        newPrivSuffix = " to Admin only" if dNewPriv == 3 else " to All members"
 
         def get_mbr_suffix():
             mbrServiceId = details.get("aci", None)
@@ -750,18 +750,18 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         elif dType == "group-link-add":
             dPriv = details.get("privilege", None)
             if dPriv != 1 and dPriv != 3:
-                return "Group join link enabled"
+                return "Group link enabled"
             # 1 = without admin approval, 3 = with admin approval
-            return f"Group join link enabled {'without' if dPriv == 1 else 'with'} admin approval"
+            return f"Group link enabled {'without' if dPriv == 1 else 'with'} admin approval"
         elif dType == "group-link-reset":
-            return "Group join link reset"
+            return "Group link reset"
         elif dType == "group-link-remove":
-            return "Group join link disabled"
+            return "Group link disabled"
         elif dType == "access-invite-link":
             # 3 = enabled, 1 = disabled
             return f"Admin approval {'enabled' if dNewPriv == 3 else 'disabled'} for group join link"
         elif dType == "access-members":
-            return f"Permission to add/remove members changed{newPrivSuffix}"
+            return f"Permission to add members changed{newPrivSuffix}"
         elif dType == "access-attributes":
             return f"Permission to modify group information changed{newPrivSuffix}"
         elif dType == "announcements-only":
@@ -831,6 +831,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                     serviceId,
                     convJson.get("name", ""),
                     e164,
+                    convJson.get("username", ""),
                     profileFullName,
                     None if cNickname == "" else cNickname,
                     cNote,
@@ -993,7 +994,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                                 )  # REVIEW: Also include E164?
 
                                 if valStatus in ("Pending", "Sent"):
-                                    continue
+                                    continue  # This is the state of the sending user
                                 if firstValStatus == None:
                                     firstValStatus = valStatus
                                     msgStatus = valStatus + " by all"
