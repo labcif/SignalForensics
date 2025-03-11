@@ -432,25 +432,74 @@ def handle_avatar(convJson, convType):
     return
 
 
+def process_attachment(args: argparse.Namespace, attachments_dir, attachment, statuses):
+    subpath = attachment["path"]
+    try:
+        # Fetch attachment crypto data
+        key = base64.b64decode(attachment["localKey"])[:32]
+        nonce = base64.b64decode(attachment["iv"])
+        size = int(attachment["size"])
+
+        # Encrypted attachment path
+        folder = ATTACHMENT_FOLDER if "path_pref" not in attachment else attachment["path_pref"]
+        enc_attachment_path = args.dir / folder / subpath
+
+        # Check if the encrypted attachment is present on the expected path
+        if not enc_attachment_path.is_file():
+            log(f"[!] Attachment {subpath} not found", 2)
+            statuses["error"] += 1
+            return
+
+        # Fetch attachment cipherdata
+        with enc_attachment_path.open("rb") as f:
+            enc_attachment_data = f.read()
+
+        # Decrypt the attachment
+        attachment_data = aes_256_cbc_decrypt(key, nonce, enc_attachment_data)
+        attachment_data = attachment_data[16 : 16 + size]  # Dismiss the first 16 bytes and the padding
+        if bytes.fromhex(attachment["plaintextHash"]) != hash_sha256(attachment_data):
+            log(f"[!] Attachment {subpath} failed integrity check", 2)
+            statuses["integrity_error"] += 1
+
+        # Save the attachment to a file
+        filePath = subpath
+        if "contentType" in attachment:
+            filePath += f"{mime_to_extension(attachment['contentType'])}"
+
+        # Ensure the parent directory exists
+        attachment_path = attachments_dir / folder / filePath
+        attachment_path.parent.mkdir(parents=True, exist_ok=True)
+        with attachment_path.open("wb") as f:
+            f.write(attachment_data)
+
+        statuses["exported"] += 1
+    except Exception as e:
+        statuses["error"] += 1
+        log(f"[!] Failed to export attachment {subpath}: {e}", 3)
+
+
 def export_attachments(cursor, args: argparse.Namespace):
     """Export Signal attachments from the database."""
 
     attachments_dir = args.output
 
-    # Fetch message attachments
-    messages = select_sql(
+    statuses = {
+        "error": 0,
+        "exported": 0,
+        "integrity_error": 0,
+    }
+
+    log("[i] Processing metadata and decrypting attachments...", 2)
+
+    # Fetch and process message attachments
+    for msg_batch in fetch_batches_select(
         cursor,
-        "SELECT json from messages WHERE hasFileAttachments = TRUE OR hasAttachments = TRUE OR json LIKE '%\"preview\":[{%';",
-        "attachment metadata",
-    )
+        "SELECT json from messages WHERE hasFileAttachments = TRUE OR hasAttachments = TRUE OR json LIKE '%\"preview\":[{%'",
+        500,
+    ):
+        it_attachments = []
 
-    # Process each attachment
-    all_attachments = []
-
-    if len(messages) == 0:
-        log("[i] No attachments were found in the database")
-    else:
-        for entry in messages:
+        for entry in msg_batch:
             # Parse the message metadata
             msgJson = json.loads(entry[0])
             attachments = msgJson.get("attachments", [])
@@ -459,9 +508,12 @@ def export_attachments(cursor, args: argparse.Namespace):
             if "preview" in msgJson and "image" in msgJson["preview"]:
                 attachments.append(msgJson["preview"]["image"])
 
-            all_attachments.extend(attachments)
+            it_attachments.extend(attachments)
 
-    del messages  # Free memory
+        for attachment in it_attachments:
+            process_attachment(args, attachments_dir, attachment, statuses)
+
+        del it_attachments
 
     # Fetch conversation avatars and draft attachments
     conversations = select_sql(
@@ -475,83 +527,33 @@ def export_attachments(cursor, args: argparse.Namespace):
     else:
         withAvatar = 0
         draftAttachments = 0
+        it_attachments = []
         for conv in conversations:
             convJsonStr, convType = conv
             convJson = json.loads(convJsonStr)
             for avatar in handle_avatar(convJson, convType):
                 avatar["contentType"] = "image/jpeg"
-                all_attachments.append(avatar)
+                it_attachments.append(avatar)
                 withAvatar += 1
             for atch in convJson.get("draftAttachments", []):
                 atch["iv"] = EMPTY_IV
                 atch["path_pref"] = DRAFTS_FOLDER
-                all_attachments.append(atch)
+                it_attachments.append(atch)
                 draftAttachments += 1
+
+        del conversations
 
         log(f"[i] Found {withAvatar} conversation avatars", 2)
         log(f"[i] Found {draftAttachments} draft attachments", 2)
 
-    del conversations
+        for attachment in it_attachments:
+            process_attachment(args, attachments_dir, attachment, statuses)
 
-    if len(all_attachments) == 0:
-        return
-
-    # Process the retrieved attachments
-    log("[i] Processing metadata and decrypting attachments...", 2)
-    counts = 0
-    error = 0
-    integrity_error = 0
-    for attachment in all_attachments:
-        subpath = attachment["path"]
-        try:
-            # Fetch attachment crypto data
-            key = base64.b64decode(attachment["localKey"])[:32]
-            nonce = base64.b64decode(attachment["iv"])
-            size = int(attachment["size"])
-
-            # Encrypted attachment path
-            folder = ATTACHMENT_FOLDER if "path_pref" not in attachment else attachment["path_pref"]
-            enc_attachment_path = args.dir / folder / subpath
-
-            # Check if the encrypted attachment is present on the expected path
-            if not enc_attachment_path.is_file():
-                log(f"[!] Attachment {subpath} not found", 2)
-                error += 1
-                continue
-
-            # Fetch attachment cipherdata
-            with enc_attachment_path.open("rb") as f:
-                enc_attachment_data = f.read()
-
-            # Decrypt the attachment
-            attachment_data = aes_256_cbc_decrypt(key, nonce, enc_attachment_data)
-            attachment_data = attachment_data[16 : 16 + size]  # Dismiss the first 16 bytes and the padding
-            if bytes.fromhex(attachment["plaintextHash"]) != hash_sha256(attachment_data):
-                log(f"[!] Attachment {subpath} failed integrity check", 2)
-                integrity_error += 1
-
-            # Save the attachment to a file
-            filePath = subpath
-            if "contentType" in attachment:
-                filePath += f"{mime_to_extension(attachment['contentType'])}"
-
-            # Ensure the parent directory exists
-            attachment_path = attachments_dir / folder / filePath
-            attachment_path.parent.mkdir(parents=True, exist_ok=True)
-            with attachment_path.open("wb") as f:
-                f.write(attachment_data)
-
-            counts += 1
-        except Exception as e:
-            error += 1
-            log(f"[!] Failed to export attachment {subpath}: {e}", 3)
-            raise e
-
-    log(f"[i] Exported {counts} attachments")
-    if integrity_error > 0:
-        log(f"[!] {integrity_error} attachments failed integrity check")
-    if error > 0:
-        log(f"[!] Failed to export {error} attachments")
+    log(f"[i] Exported {statuses['exported']} attachments")
+    if statuses["integrity_error"] > 0:
+        log(f"[!] {statuses['integrity_error']} attachments failed integrity check")
+    if statuses["error"] > 0:
+        log(f"[!] Failed to export {statuses['error']} attachments")
 
 
 ####################### CSV REPORTS #######################
