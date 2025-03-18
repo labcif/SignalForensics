@@ -742,10 +742,15 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             newText += "@" + mention.get("replacementText", service2name.get(mention["mentionAci"], "unknown"))
         return newText
 
-    def process_message_bodyranges(msgJson, keyBodyRanges="bodyRanges", keyBody="body"):
+    def process_message_bodyranges(
+        msgJson,
+        body=None,
+        keyBodyRanges="bodyRanges",
+        keyBody="body",
+    ):
         """Process a message's body ranges."""
         msgBodyRanges = msgJson.get(keyBodyRanges, [])
-        msgBody = msgJson.get(keyBody, None)
+        msgBody = body if body != None else msgJson.get(keyBody, None)
         if len(msgBodyRanges) > 0:
             msgBody = print_mentions_in_message(msgBody, msgBodyRanges)
         return msgBody
@@ -1005,7 +1010,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
 
     for msg_batch in fetch_batches_select(
         cursor,
-        "SELECT id, type, conversationId, json, hasAttachments, hasFileAttachments, readStatus, seenStatus FROM messages WHERE type IN ('outgoing','incoming','group-v2-change','timer-notification')",
+        "SELECT id, type, conversationId, json, hasAttachments, hasFileAttachments, readStatus, seenStatus, sent_at, conversationId, received_at_ms, expiresAt, body, isErased, isViewOnce, sourceServiceId, sourceDevice FROM messages WHERE type IN ('outgoing','incoming','group-v2-change','timer-notification')",
     ):
         messages_rows = defaultdict(list)
         msgs_statuses_rows = defaultdict(list)
@@ -1016,7 +1021,25 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         convIdKeys = []
 
         for msg in msg_batch:
-            msgId, msgType, msgConvId, msgJsonStr, hasAttachments, hasFileAttachments, readStatus, seenStatus = msg
+            (
+                msgId,
+                msgType,
+                msgConvId,
+                msgJsonStr,
+                hasAttachments,
+                hasFileAttachments,
+                readStatus,
+                seenStatus,
+                sent_at,
+                conversationId,
+                received_at_ms,
+                msgExpiresAt,
+                body,
+                isErased,
+                isViewOnce,
+                sourceServiceId,
+                sourceDevice,
+            ) = msg
             convIdKey = msgConvId if not args.merge_conversations else None
             if convIdKey not in convIdKeys:
                 convIdKeys.append(convIdKey)
@@ -1025,18 +1048,12 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
 
                 msgConvType = convId2conv.get(msgConvId, {}).get("type", "")
                 msgConvName = convId2conv.get(msgConvId, {}).get("name", "")
-                msgAuthorServiceId = msgJson.get("sourceServiceId", None)
+                msgAuthorServiceId = sourceServiceId
                 msgAuthor = service2name.get(msgAuthorServiceId, "")
 
                 if msgType in ("outgoing", "incoming", "timer-notification"):
-                    # Message expiration handling
-                    expiresTimer = msgJson.get("expiresTimer", None)
-                    msgExpiresAt = None
-                    if expiresTimer is not None:
-                        msgExpiresAt = msgJson.get("expirationStartTimestamp", None) + (expiresTimer * 1000)
-
                     # Message body handling
-                    msgBody = process_message_bodyranges(msgJson)
+                    msgBody = process_message_bodyranges(msgJson, body)
 
                     # Message view state handling
                     msgStatus = ""
@@ -1151,20 +1168,20 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                             msgConvId,
                             msgConvType,
                             msgConvName,
-                            tts(msgJson.get("sent_at", None)),
-                            tts(msgJson.get("received_at_ms", None)),
+                            tts(sent_at),
+                            tts(received_at_ms),
                             msgAuthor,
                             msgBody,
                             hasAttachments or hasFileAttachments or hasPreview,
-                            msgJson.get("isViewOnce", False),
-                            msgJson.get("isErased", False),
+                            isViewOnce,
+                            isErased,
                             tts(msgExpiresAt),
                             msgStatus,
                             hasReactions,
                             hasEditHistory,
                             tts(msgLastEditReceivedAt),
                             msgAuthorServiceId,
-                            msgJson.get("sourceDevice", None),
+                            sourceDevice,
                         ]
                     )
                 elif msgType == "group-v2-change":
