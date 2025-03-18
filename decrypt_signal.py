@@ -158,7 +158,9 @@ def parse_args():
         "-sD", "--skip-database", help="Skip exporting a decrypted copy of the database", action="store_true"
     )
     parser.add_argument("-sA", "--skip-attachments", help="Skip attachment decryption", action="store_true")
-    parser.add_argument("-sR", "--skip-reports", help="Skip the generation of CSV reports", action="store_true")
+    parser.add_argument(
+        "-sR", "--skip-reports", help="Skip the generation of CSV and HTML reports", action="store_true"
+    )
 
     # Validate the provided timezone.
     def validate_timezone(value):

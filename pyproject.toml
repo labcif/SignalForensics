@@ -6,13 +6,15 @@ include = '\.pyi?$'
 name = "wyoming"
 version = "1.0.0"
 description = ""
-authors = ["Your Name <gonssalu@proton.me>"]
+authors = ["Gonçalo Paulino <gonssalu@proton.me>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.11"
 cryptography = "^44.0.0"
 pywin32 = "^308"
+pytz = "^2025.1"
+sqlcipher3-wheels = "^0.5.4"
 
 
 [build-system]
