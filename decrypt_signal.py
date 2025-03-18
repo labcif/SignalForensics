@@ -11,6 +11,7 @@ import sys
 import csv
 from datetime import datetime
 import pytz
+import html
 from collections import defaultdict
 
 import sqlcipher3
@@ -556,7 +557,7 @@ def export_attachments(cursor, args: argparse.Namespace):
         log(f"[!] Failed to export {statuses['error']} attachments")
 
 
-####################### CSV REPORTS #######################
+####################### CSV/HTML REPORTS #######################
 
 
 def write_csv_file(path, headers, rows):
@@ -571,6 +572,65 @@ def write_csv_file(path, headers, rows):
                 csvfile.write("SEP=,\n")
                 writer.writerow(headers)
             writer.writerows(rows)
+    except Exception as e:
+        log(f"[!] Failed to write CSV file: {e}")
+        return False
+    return True
+
+
+def write_html_file(path, headers, rows, last=False):
+    """Writes an HTML file with the provided headers and rows."""
+    if len(rows) == 0:
+        return True
+    try:
+        fileExists = path.is_file()
+        with open(path, "a", newline="", encoding="utf-8") as htmlfile:
+            if not fileExists:
+                htmlfile.write(
+                    f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <link rel="stylesheet" 
+                          href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+                    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+                    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+                    <script>
+                        $(document).ready(function() {{
+                            $('table').DataTable();
+                        }});
+                    </script>
+                </head>
+                <body>
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                        {''.join(f'<th>{html.escape(h)}</th>' for h in headers)}
+                        </tr>
+                    </thead>
+                    <tbody>
+                """
+                )
+
+            # Write rows
+            for row in rows:
+                htmlfile.write(f"<tr>{''.join(f'<td>{html.escape(str(cell))}</td>' for cell in row)}</tr>\n")
+
+            if last:
+                htmlfile.write("</tbody></table></body></html>")
+    except Exception as e:
+        log(f"[!] Failed to write CSV file: {e}")
+        return False
+    return True
+
+
+def finish_html_file(path):
+    """Writes an HTML file with the necessary footer."""
+    try:
+        fileExists = path.is_file()
+        if fileExists:
+            with open(path, "a", newline="", encoding="utf-8") as htmlfile:
+                htmlfile.write("</tbody></table></body></html>")
     except Exception as e:
         log(f"[!] Failed to write CSV file: {e}")
         return False
@@ -878,6 +938,15 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     if not write_csv_file(reports_folder / "groups_members.csv", GROUPS_MEMBERS_HEADERS, group_members_rows):
         log("[!] Failed to write the groups members CSV file")
 
+    if not write_html_file(reports_folder / "conversations.html", CONVERSATIONS_HEADERS, conv_rows, last=True):
+        log("[!] Failed to write the conversations HTML file")
+    if not write_html_file(reports_folder / "contacts.html", CONTACTS_HEADERS, contacts_rows, last=True):
+        log("[!] Failed to write the contacts HTML file")
+    if not write_html_file(
+        reports_folder / "groups_members.html", GROUPS_MEMBERS_HEADERS, group_members_rows, last=True
+    ):
+        log("[!] Failed to write the groups members HTML file")
+
     # Free memory
     conv_rows.clear()
     contacts_rows.clear()
@@ -931,6 +1000,8 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Details in JSON",
         "Author's Service ID",
     ]  # TODO: Details -> Something better
+
+    htmlReportsToFinish = set()
 
     for msg_batch in fetch_batches_select(
         cursor,
@@ -1122,6 +1193,14 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             except Exception as e:
                 log(f"[!] Failed to process message {msgId}: {e}", 3)
 
+        def append_to_reports(name, reportLocation, headers, rows):
+            if not write_csv_file(reportLocation.with_suffix(".csv"), headers, rows):
+                log(f"[!] Failed to write to the {name} CSV file")
+            if not write_html_file(reportLocation.with_suffix(".html"), headers, rows):
+                log(f"[!] Failed to write to the {name} HTML file")
+            else:
+                htmlReportsToFinish.add(reportLocation.with_suffix(".html"))
+
         # Append to the csv files
         for kConvId in convIdKeys:
             if not kConvId in messages_rows and not kConvId in groups_changes_rows:
@@ -1133,39 +1212,42 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 suffix = "_" + kConvId
                 reportFolder.mkdir(parents=True, exist_ok=True)
 
-            if not write_csv_file(reportFolder / f"messages{suffix}.csv", MESSAGES_HEADERS, messages_rows[kConvId]):
-                log("[!] Failed to write to the messages CSV file")
+            append_to_reports("messages", reportFolder / f"messages{suffix}", MESSAGES_HEADERS, messages_rows[kConvId])
 
-            if not write_csv_file(
-                reportFolder / f"outgoing_group_messages_statuses{suffix}.csv",
+            append_to_reports(
+                "messages statuses",
+                reportFolder / f"outgoing_group_messages_statuses{suffix}",
                 MSGS_STATUSES_HEADERS,
                 msgs_statuses_rows[kConvId],
-            ):
-                log("[!] Failed to write to the messages statuses CSV file")
+            )
 
-            if not write_csv_file(
-                reportFolder / f"messages_version_histories{suffix}.csv",
+            append_to_reports(
+                "messages version histories",
+                reportFolder / f"messages_version_histories{suffix}",
                 MSGS_VERSION_HISTS_HEADERS,
                 msgs_version_hists_rows[kConvId],
-            ):
-                log("[!] Failed to write to the messages version histories CSV file")
+            )
 
-            if not write_csv_file(
-                reportFolder / f"messages_reactions{suffix}.csv", MSGS_REACTIONS_HEADERS, msgs_reactions_rows[kConvId]
-            ):
-                log("[!] Failed to write to the messages reactions CSV file")
+            append_to_reports(
+                "messages reactions",
+                reportFolder / f"messages_reactions{suffix}",
+                MSGS_REACTIONS_HEADERS,
+                msgs_reactions_rows[kConvId],
+            )
 
-            if not write_csv_file(
-                reportFolder / f"messages_attachments{suffix}.csv",
+            append_to_reports(
+                "messages attachments",
+                reportFolder / f"messages_attachments{suffix}",
                 MSGS_ATTACHMENTS_HEADERS,
                 msgs_attachments_rows[kConvId],
-            ):
-                log("[!] Failed to write to the messages attachments CSV file")
+            )
 
-            if not write_csv_file(
-                reportFolder / f"groups_changes{suffix}.csv", GROUPS_CHANGES_HEADERS, groups_changes_rows[kConvId]
-            ):
-                log("[!] Failed to write to the groups changes CSV file")
+            append_to_reports(
+                "group changes",
+                reportFolder / f"groups_changes{suffix}",
+                GROUPS_CHANGES_HEADERS,
+                groups_changes_rows[kConvId],
+            )
 
         # Free memory
         messages_rows.clear()
@@ -1183,6 +1265,10 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     del msgs_attachments_rows
     del groups_changes_rows
     del convIdKeys
+
+    for htmlReport in htmlReportsToFinish:
+        if not finish_html_file(htmlReport):
+            log(f"[!] Failed to finish the {htmlReport} HTML file", 1)
 
     call_history = select_sql(
         cursor,
@@ -1235,7 +1321,9 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 ]
             )
         if not write_csv_file(reports_folder / "calls_history.csv", CALLS_HEADERS, calls_rows):
-            log("[!] Failed to write the calls CSV file")
+            log("[!] Failed to write the calls history CSV file")
+        if not write_html_file(reports_folder / "calls_history.html", CALLS_HEADERS, calls_rows, last=True):
+            log("[!] Failed to write the calls history HTML file")
 
 
 ####################### MISC HELPER FUNCTIONS #######################
