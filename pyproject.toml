@@ -15,6 +15,8 @@ cryptography = "^44.0.0"
 pywin32 = "^308"
 pytz = "^2025.1"
 sqlcipher3-wheels = "^0.5.4"
+pandas = "^2.2.3"
+jinja2 = "^3.1.6"
 
 
 [build-system]
