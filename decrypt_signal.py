@@ -853,6 +853,8 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
 
         return 'Uknown group change check "Details in JSON" for more information'
 
+    myServiceId = None
+
     # Populate the service2name dictionary
     for conv in conversations:
         (convId, convJsonStr, convType, convActiveAt, serviceId, profileFullName, e164) = conv[:7]
@@ -864,6 +866,8 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 theName = profileFullName if profileFullName is not None else e164
             service2name[serviceId] = theName
             conv2service[convId] = serviceId
+            if "avatars" in convJson:
+                myServiceId = serviceId
         elif convType == "group":
             groupId = convJson.get("groupId", None)
             group2name[groupId] = theName
@@ -1073,6 +1077,9 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                             # This should not happen
                             msgStatus = f"UNKNOWN (readStatus: {readStatus} | seenStatus: {seenStatus})"
                     elif msgType == "outgoing":
+                        if msgAuthorServiceId is None:
+                            msgAuthorServiceId = myServiceId
+                            msgAuthor = service2name.get(msgAuthorServiceId, "")
                         sendStateByConversationId = msgJson.get("sendStateByConversationId", {})
                         if msgConvType == "private":
                             msgStatus = sendStateByConversationId.get(msgConvId, {}).get("status", None)
@@ -1177,9 +1184,9 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                             tts(received_at_ms),
                             msgAuthor,
                             msgBody,
-                            hasAttachments or hasFileAttachments or hasPreview,
-                            isViewOnce,
-                            isErased,
+                            (hasAttachments or hasFileAttachments or hasPreview) == 1,
+                            isViewOnce == 1,
+                            isErased == 1,
                             tts(msgExpiresAt),
                             msgStatus,
                             hasReactions,
