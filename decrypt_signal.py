@@ -11,7 +11,6 @@ import sys
 import csv
 from datetime import datetime
 import pytz
-import html
 from collections import defaultdict
 
 import sqlcipher3
@@ -19,6 +18,7 @@ import sqlcipher3
 from modules import shared_utils as su
 from modules.shared_utils import bytes_to_hex, log, MalformedKeyError
 from modules.crypto import aes_256_gcm_decrypt, aes_256_cbc_decrypt, hash_sha256
+from modules.htmlreport import generate_html_report
 
 ####################### CONSTANTS #######################
 VERSION = "1.0"
@@ -580,68 +580,6 @@ def write_csv_file(path, headers, rows):
     return True
 
 
-def write_html_file(path, headers, rows, last=False):
-    """Writes an HTML file with the provided headers and rows."""
-    if len(rows) == 0:
-        return True
-    try:
-        fileExists = path.is_file()
-        with open(path, "a", newline="", encoding="utf-8") as htmlfile:
-            if not fileExists:
-                htmlfile.write(
-                    f"""
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <link rel="stylesheet" 
-                          href="https://cdn.datatables.net/2.2.2/css/dataTables.dataTables.min.css">
-                    <script
-			  src="https://code.jquery.com/jquery-3.7.1.min.js"
-			  integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo="
-			  crossorigin="anonymous"></script>
-                    <script src="https://cdn.datatables.net/2.2.2/js/dataTables.min.js"></script>
-                    <script>
-                        $(document).ready(function() {{
-                            $('table').DataTable();
-                        }});
-                    </script>
-                </head>
-                <body>
-                <table class="table table-striped">
-                    <thead>
-                        <tr>
-                        {''.join(f'<th>{html.escape(h)}</th>' for h in headers)}
-                        </tr>
-                    </thead>
-                    <tbody>
-                """
-                )
-
-            # Write rows
-            for row in rows:
-                htmlfile.write(f"<tr>{''.join(f'<td>{html.escape(str(cell))}</td>' for cell in row)}</tr>\n")
-
-            if last:
-                htmlfile.write("</tbody></table></body></html>")
-    except Exception as e:
-        log(f"[!] Failed to write CSV file: {e}")
-        return False
-    return True
-
-
-def finish_html_file(path):
-    """Writes an HTML file with the necessary footer."""
-    try:
-        fileExists = path.is_file()
-        if fileExists:
-            with open(path, "a", newline="", encoding="utf-8") as htmlfile:
-                htmlfile.write("</tbody></table></body></html>")
-    except Exception as e:
-        log(f"[!] Failed to write CSV file: {e}")
-        return False
-    return True
-
-
 def process_database_and_write_reports(cursor, args: argparse.Namespace):
     """Write reports from the artifacts found in the database"""
 
@@ -952,15 +890,6 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     if not write_csv_file(reports_folder / "groups_members.csv", GROUPS_MEMBERS_HEADERS, group_members_rows):
         log("[!] Failed to write the groups members CSV file")
 
-    if not write_html_file(reports_folder / "conversations.html", CONVERSATIONS_HEADERS, conv_rows, last=True):
-        log("[!] Failed to write the conversations HTML file")
-    if not write_html_file(reports_folder / "contacts.html", CONTACTS_HEADERS, contacts_rows, last=True):
-        log("[!] Failed to write the contacts HTML file")
-    if not write_html_file(
-        reports_folder / "groups_members.html", GROUPS_MEMBERS_HEADERS, group_members_rows, last=True
-    ):
-        log("[!] Failed to write the groups members HTML file")
-
     # Free memory
     conv_rows.clear()
     contacts_rows.clear()
@@ -1014,8 +943,6 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Details in JSON",
         "Author's Service ID",
     ]  # TODO: Details -> Something better
-
-    htmlReportsToFinish = set()
 
     for msg_batch in fetch_batches_select(
         cursor,
@@ -1225,10 +1152,6 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         def append_to_reports(name, reportLocation, headers, rows):
             if not write_csv_file(reportLocation.with_suffix(".csv"), headers, rows):
                 log(f"[!] Failed to write to the {name} CSV file")
-            if not write_html_file(reportLocation.with_suffix(".html"), headers, rows):
-                log(f"[!] Failed to write to the {name} HTML file")
-            else:
-                htmlReportsToFinish.add(reportLocation.with_suffix(".html"))
 
         # Append to the csv files
         for kConvId in convIdKeys:
@@ -1295,10 +1218,6 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     del groups_changes_rows
     del convIdKeys
 
-    for htmlReport in htmlReportsToFinish:
-        if not finish_html_file(htmlReport):
-            log(f"[!] Failed to finish the {htmlReport} HTML file", 1)
-
     call_history = select_sql(
         cursor,
         "SELECT callId, peerId, ringerId, mode, type, direction, status, timestamp, startedById, endedTimestamp FROM callsHistory;",
@@ -1351,8 +1270,6 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             )
         if not write_csv_file(reports_folder / "calls_history.csv", CALLS_HEADERS, calls_rows):
             log("[!] Failed to write the calls history CSV file")
-        if not write_html_file(reports_folder / "calls_history.html", CALLS_HEADERS, calls_rows, last=True):
-            log("[!] Failed to write the calls history HTML file")
 
 
 ####################### MISC HELPER FUNCTIONS #######################
@@ -1450,6 +1367,7 @@ def main():
     if not args.skip_reports:
         log("[i] Writing reports...")
         process_database_and_write_reports(db_cursor, args)
+        generate_html_report(args)
 
     # Close the database connection
     log("Closing the database connections...", 3)
