@@ -436,10 +436,17 @@ def handle_avatar(convJson, convType):
 
 
 def process_attachment(args: argparse.Namespace, attachments_dir, attachment, statuses):
+    if attachment.get("contentType", "") == "text/x-signal-story":
+        return
     subpath = attachment["path"]
     try:
         # Fetch attachment crypto data
         key = base64.b64decode(attachment["localKey"])[:32]
+
+        if "iv" not in attachment:
+            # If the IV is not present in the attachment, use the empty IV
+            attachment["iv"] = EMPTY_IV
+
         nonce = base64.b64decode(attachment["iv"])
         size = int(attachment["size"])
 
@@ -615,6 +622,8 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     # Timestamp managing function
     def tts(timestamp, ms=True):
         if timestamp is None:
+            return None
+        if timestamp == 9007199254740991:
             return None
         return localize_timestamp(timestamp, args, ms)
 
@@ -914,6 +923,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
         "Expires At",
         "Message Status",
         "Has Reactions?",
+        "Quoted Message ID",
         "Has Edit History?",
         "Last Edit Received At",
         "Author's Service ID",
@@ -946,7 +956,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
 
     for msg_batch in fetch_batches_select(
         cursor,
-        "SELECT id, type, conversationId, json, hasAttachments, hasFileAttachments, readStatus, seenStatus, sent_at, conversationId, received_at_ms, expiresAt, body, isErased, isViewOnce, sourceServiceId, sourceDevice FROM messages WHERE type IN ('outgoing','incoming','group-v2-change','timer-notification')",
+        "SELECT id, type, conversationId, json, hasAttachments, hasFileAttachments, readStatus, seenStatus, sent_at, received_at_ms, expiresAt, body, isErased, isViewOnce, sourceServiceId, sourceDevice FROM messages WHERE type IN ('outgoing','incoming','group-v2-change','timer-notification', 'story')",
     ):
         messages_rows = defaultdict(list)
         msgs_statuses_rows = defaultdict(list)
@@ -967,7 +977,6 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 readStatus,
                 seenStatus,
                 sent_at,
-                conversationId,
                 received_at_ms,
                 msgExpiresAt,
                 body,
@@ -987,7 +996,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                 msgAuthorServiceId = sourceServiceId
                 msgAuthor = service2name.get(msgAuthorServiceId, "")
 
-                if msgType in ("outgoing", "incoming", "timer-notification"):
+                if msgType in ("outgoing", "incoming", "timer-notification", "story"):
                     # Message body handling
                     msgBody = process_message_bodyranges(msgJson, body)
 
@@ -1003,14 +1012,14 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                         else:
                             # This should not happen
                             msgStatus = f"UNKNOWN (readStatus: {readStatus} | seenStatus: {seenStatus})"
-                    elif msgType == "outgoing":
+                    elif msgType == "outgoing" or msgType == "story":
                         if msgAuthorServiceId is None:
                             msgAuthorServiceId = myServiceId
                             msgAuthor = service2name.get(msgAuthorServiceId, "")
                         sendStateByConversationId = msgJson.get("sendStateByConversationId", {})
-                        if msgConvType == "private":
+                        if msgConvType == "private" and msgType != "story":
                             msgStatus = sendStateByConversationId.get(msgConvId, {}).get("status", None)
-                        elif msgConvType == "group":
+                        elif msgConvType == "group" or msgType == "story":
                             firstValStatus = None
                             msgStatus = None
                             for cId, value in reversed(sendStateByConversationId.items()):
@@ -1068,14 +1077,18 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                     if hasAttachments or hasFileAttachments:
                         attachments = msgJson.get("attachments", [])
                         for attachment in attachments:
-                            msgs_attachments_rows[convIdKey].append(
-                                [
-                                    msgId,
-                                    "attachment",
-                                    attachment.get("path", None),
-                                    attachment.get("contentType", None),
-                                ]
-                            )
+                            attContType = attachment.get("contentType", None)
+                            if msgType == "story" and attContType == "text/x-signal-story":
+                                msgBody = attachment.get("textAttachment", {}).get("text", "")
+                            else:
+                                msgs_attachments_rows[convIdKey].append(
+                                    [
+                                        msgId,
+                                        "attachment",
+                                        attachment.get("path", None),
+                                        attContType,
+                                    ]
+                                )
                     if hasPreview:
                         previews = msgJson.get("preview", [])
                         for preview in previews:
@@ -1100,6 +1113,8 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                             else f"{msgAuthor} disabled the expiration timer"
                         )
 
+                    quotedMessageId = msgJson.get("quote", {}).get("messageId", None)
+
                     messages_rows[convIdKey].append(
                         [
                             msgId,
@@ -1117,6 +1132,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                             tts(msgExpiresAt),
                             msgStatus,
                             hasReactions,
+                            quotedMessageId,
                             hasEditHistory,
                             tts(msgLastEditReceivedAt),
                             msgAuthorServiceId,
