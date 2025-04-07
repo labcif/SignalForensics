@@ -3,12 +3,11 @@ line-length = 120
 include = '\.pyi?$'
 
 [tool.poetry]
-name = "wyoming"
+name = "SignalForensics"
 version = "1.0.0"
 description = ""
 authors = ["Gonçalo Paulino <gonssalu@proton.me>"]
 readme = "README.md"
-package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.11"
