@@ -1,3 +1,5 @@
+import mimetypes
+
 quiet = False
 verbose = 0
 
@@ -9,6 +11,12 @@ def log(message: str, level: int = 0):
 
 def bytes_to_hex(data: bytes):
     return "".join(f"{b:02x}" for b in data)
+
+
+def mime_to_extension(mime_type):
+    """Converts a MIME type to a file extension."""
+    extension = mimetypes.guess_extension(mime_type)
+    return extension
 
 
 ####################### EXCEPTIONS #######################

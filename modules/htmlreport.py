@@ -4,6 +4,7 @@ import pandas as pd
 import re
 from jinja2 import Environment, DictLoader
 from modules.shared_utils import log
+from modules.shared_utils import mime_to_extension
 
 TEMPLATES = {
     "report_template.html": """<!DOCTYPE html>
@@ -258,8 +259,24 @@ def generate_html_report(args: argparse.Namespace):
 
                 table_label = file_labels.get(base_name, base_name.replace("_", " ").title())
 
-                df = pd.read_csv(os.path.join(root, file), skiprows=1)
-                tables[table_id] = df.to_html(index=False, classes="display", border=0)
+                csv_path = os.path.join(root, file)
+                df = pd.read_csv(csv_path, skiprows=1)
+
+                # Special handling for message_attachments: hyperlink the 3rd column
+                if base_name == "messages_attachments" and df.shape[1] >= 3:
+
+                    def make_link(path, mimetype):
+                        if pd.isna(path):
+                            return ""
+                        safe_path = str(path).strip()
+                        ext = mime_to_extension(mimetype) if not pd.isna(mimetype) else ""
+                        return f'<a href="../attachments.noindex/{safe_path}{ext}" target="_blank">{safe_path}{ext}</a>'
+
+                    df.iloc[:, 2] = [make_link(path, mimetype) for path, mimetype in zip(df.iloc[:, 2], df.iloc[:, 3])]
+                    tables[table_id] = df.to_html(index=False, classes="display", border=0, escape=False)
+                else:
+                    tables[table_id] = df.to_html(index=False, classes="display", border=0)
+
                 categories[category]["tables"].append((table_id, table_label))
 
     log("Generating HTML report...", 2)

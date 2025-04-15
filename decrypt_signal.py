@@ -16,7 +16,7 @@ from collections import defaultdict
 import sqlcipher3
 
 from modules import shared_utils as su
-from modules.shared_utils import bytes_to_hex, log, MalformedKeyError
+from modules.shared_utils import bytes_to_hex, log, MalformedKeyError, mime_to_extension
 from modules.crypto import aes_256_gcm_decrypt, aes_256_cbc_decrypt, hash_sha256
 from modules.htmlreport import generate_html_report
 
@@ -1310,12 +1310,6 @@ def localize_timestamp(timestamp, args: argparse.Namespace, ms=True):
 def generate_db_name(length=8, prefix="signal"):
     """Generates a random database name."""
     return f"{prefix}_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=length))
-
-
-def mime_to_extension(mime_type):
-    """Converts a MIME type to a file extension."""
-    extension = mimetypes.guess_extension(mime_type)
-    return extension
 
 
 ####################### HEADER #######################
