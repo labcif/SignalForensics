@@ -17,7 +17,7 @@ import sqlcipher3
 
 from modules import shared_utils as su
 from modules.shared_utils import bytes_to_hex, log, MalformedKeyError, mime_to_extension
-from modules.crypto import aes_256_gcm_decrypt, aes_256_cbc_decrypt, hash_sha256
+from modules.crypto import aes_256_gcm_decrypt, aes_cbc_decrypt, hash_sha256
 from modules.htmlreport import generate_html_report
 
 ####################### CONSTANTS #######################
@@ -465,7 +465,7 @@ def process_attachment(args: argparse.Namespace, attachments_dir, attachment, st
             enc_attachment_data = f.read()
 
         # Decrypt the attachment
-        attachment_data = aes_256_cbc_decrypt(key, nonce, enc_attachment_data)
+        attachment_data = aes_cbc_decrypt(key, nonce, enc_attachment_data)
         attachment_data = attachment_data[16 : 16 + size]  # Dismiss the first 16 bytes and the padding
         if bytes.fromhex(attachment["plaintextHash"]) != hash_sha256(attachment_data):
             log(f"[!] Attachment {subpath} failed integrity check", 2)
