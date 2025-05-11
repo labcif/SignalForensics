@@ -164,9 +164,7 @@ def get_decryption_key_gnome(keyring_path: str, password: bytes, encrypted_key: 
     # print(f"Auxiliary Key: {bytes_to_hex(aux_key)}")
 
     # Decrypt the decryption key using the auxiliary key
-    iv = b" " * 16
-
-    decryption_key = aes_cbc_decrypt(aux_key, iv, encrypted_key).decode("utf-8")  # TODO: Error handling
+    decryption_key = aes_cbc_decrypt(aux_key, b" " * 16, encrypted_key).decode("utf-8")  # TODO: Error handling
 
     # print(f"Decryption Key: {decryption_key}")
 
