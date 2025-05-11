@@ -147,7 +147,7 @@ def extract_passphrase(keyring: bytes, num_items: int):
 
     if passphrase is None:
         raise ValueError("Signal's auxiliary key not found in the keyring.")
-    return passphrase
+    return passphrase.decode("utf-8")
 
 
 def get_decryption_key_gnome(keyring_path: str, password: bytes):
@@ -158,6 +158,6 @@ def get_decryption_key_gnome(keyring_path: str, password: bytes):
 
     passphrase = extract_passphrase(keyring, num_items)
 
-    # print(f"Signal's passpharase key: {passphrase}")
+    print(f"Extracted Passphrase: {passphrase}")
 
     return passphrase
