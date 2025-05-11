@@ -1,9 +1,8 @@
-from modules.crypto import derive_evp_key, aes_cbc_decrypt, pbkdf2_derive_key
+from modules.crypto import derive_evp_key, aes_cbc_decrypt, pbkdf2_derive_key, hash_md5
+from cryptography.hazmat.primitives.hashes import SHA1
 from modules.shared_utils import bytes_to_hex
 import pathlib
 import struct
-
-from modules.crypto import hash_md5
 
 
 # Skip the string length in a keyring file
@@ -147,10 +146,10 @@ def extract_passphrase(keyring: bytes, num_items: int):
 
     if passphrase is None:
         raise ValueError("Signal's auxiliary key not found in the keyring.")
-    return passphrase.decode("utf-8")
+    return passphrase
 
 
-def get_decryption_key_gnome(keyring_path: str, password: bytes):
+def get_decryption_key_gnome(keyring_path: str, password: bytes, encrypted_key: bytes):
     hash_iterations, salt, encrypted_keyring_data, num_items = process_keyring_file(pathlib.Path(keyring_path))
 
     keyring_key = derive_evp_key(password=password, salt=salt, key_len=16, iterations=hash_iterations)
@@ -158,6 +157,17 @@ def get_decryption_key_gnome(keyring_path: str, password: bytes):
 
     passphrase = extract_passphrase(keyring, num_items)
 
-    print(f"Extracted Passphrase: {passphrase}")
+    # print(f"Extracted Passphrase: {passphrase.decode('utf-8')}")
 
-    return passphrase
+    aux_key = pbkdf2_derive_key(algorithm=SHA1(), password=passphrase, salt=b"saltysalt", iterations=1, key_length=16)
+
+    # print(f"Auxiliary Key: {bytes_to_hex(aux_key)}")
+
+    # Decrypt the decryption key using the auxiliary key
+    iv = b" " * 16
+
+    decryption_key = aes_cbc_decrypt(aux_key, iv, encrypted_key).decode("utf-8")  # TODO: Error handling
+
+    # print(f"Decryption Key: {decryption_key}")
+
+    return decryption_key
