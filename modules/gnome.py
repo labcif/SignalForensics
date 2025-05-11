@@ -1,4 +1,4 @@
-from modules.crypto import derive_evp_key, aes_cbc_decrypt
+from modules.crypto import derive_evp_key, aes_cbc_decrypt, pbkdf2_derive_key
 from modules.shared_utils import bytes_to_hex
 import pathlib
 import struct
@@ -85,8 +85,8 @@ def decrypt_keyring_data(encrypted_data: bytes, key: bytes):
     return decrypted_data
 
 
-# Extract the auxiliary key from the decrypted keyring data
-def extract_auxiliary_key(keyring: bytes, num_items: int):
+# Extract the passphrase from the decrypted keyring data
+def extract_passphrase(keyring: bytes, num_items: int):
     # check_hash = keyring[:16]
     # actual_hash = hash_md5(keyring[16:], rounds=1)
     # HACK: These hashes should match, but they don't even when the keyring is decrypted correctly, not sure why
@@ -100,7 +100,7 @@ def extract_auxiliary_key(keyring: bytes, num_items: int):
         )
 
     idx = 16
-    aux_key = None
+    passphrase = None
     for i in range(num_items):
         # Get the item display name length
         idx = skip_string(keyring, idx) + 4
@@ -141,13 +141,13 @@ def extract_auxiliary_key(keyring: bytes, num_items: int):
             idx += val_len
 
             if name == b"application" and val == b"Signal":
-                aux_key = secret
+                passphrase = secret
                 break
         break
 
-    if aux_key is None:
+    if passphrase is None:
         raise ValueError("Signal's auxiliary key not found in the keyring.")
-    return aux_key
+    return passphrase
 
 
 def get_decryption_key_gnome(keyring_path: str, password: bytes):
@@ -156,7 +156,8 @@ def get_decryption_key_gnome(keyring_path: str, password: bytes):
     keyring_key = derive_evp_key(password=password, salt=salt, key_len=16, iterations=hash_iterations)
     keyring = decrypt_keyring_data(encrypted_keyring_data, keyring_key)
 
-    aux_key = extract_auxiliary_key(keyring, num_items)
+    passphrase = extract_passphrase(keyring, num_items)
 
-    print(f"Signal's auxiliary key: {aux_key}")
-    return aux_key
+    # print(f"Signal's passpharase key: {passphrase}")
+
+    return passphrase
