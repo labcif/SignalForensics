@@ -19,6 +19,7 @@ from modules import shared_utils as su
 from modules.shared_utils import bytes_to_hex, log, MalformedKeyError, mime_to_extension
 from modules.crypto import aes_256_gcm_decrypt, aes_cbc_decrypt, hash_sha256
 from modules.htmlreport import generate_html_report
+from modules.gnome import gnome_get_aux_key, gnome_get_sqlcipher_key_from_aux
 
 ####################### CONSTANTS #######################
 VERSION = "1.0"
@@ -26,6 +27,7 @@ VERSION = "1.0"
 AUX_KEY_PREFIX = "DPAPI"
 
 DEC_KEY_PREFIX = "v10"
+DEC_KEY_PREFIX_GNOME = "v11"
 
 DPAPI_BLOB_GUID = uuid.UUID("df9d8cd0-1501-11d1-8c7a-00c04fc297eb")
 
@@ -52,10 +54,10 @@ def parse_args():
     parser = argparse.ArgumentParser(
         prog="SignalDecryptor",
         description="Decrypts the forensic artifacts from Signal Desktop on Windows",
-        usage="""%(prog)s [-m auto] -d <signal_dir> [-o <output_dir>] [OPTIONS]
-        %(prog)s -m aux -d <signal_dir> [-o <output_dir>] [-kf <file> | -k <HEX>] [OPTIONS]
-        %(prog)s -m key -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
-        %(prog)s -m manual -d <signal_dir> [-o <output_dir>] -wS <SID> -wP <password> [OPTIONS]
+        usage="""%(prog)s [-m live] [-e <environment>] -d <signal_dir> [-o <output_dir>] [OPTIONS]
+        %(prog)s -m aux [-e <environment>] -d <signal_dir> [-o <output_dir>] [-kf <file> | -k <HEX>] [OPTIONS]
+        %(prog)s -m key [-e <environment>] -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
+        %(prog)s -m forensic [-e <environment>] -d <signal_dir> [-o <output_dir>] -p <password> [OPTIONS]
         """,
     )
     # [-d <signal_dir> | (-c <file> -ls <file>)]
@@ -72,18 +74,34 @@ def parse_args():
     # Custom function to parse mode argument
     def parse_mode(value):
         aliases = {
-            "auto": "auto",
-            "manual": "manual",
+            "live": "live",
+            "forensic": "forensic",
             "aux": "aux",
             "key": "key",
-            "a": "auto",
-            "m": "manual",
+            "a": "live",
+            "f": "forensic",
             "ak": "aux",
-            "dk": "key",
+            "sk": "key",
         }
         normalized_value = value.lower()
         if normalized_value not in aliases:
             raise argparse.ArgumentTypeError(f"Invalid mode '{value}'. Valid choices are: {', '.join(aliases.keys())}")
+        return aliases[normalized_value]
+
+    # Custom function to parse env argument
+    def parse_env(value):
+        aliases = {
+            "windows": "windows",
+            "gnome": "gnome",
+            "win": "windows",
+            "w": "windows",
+            "g": "gnome",
+        }
+        normalized_value = value.lower()
+        if normalized_value not in aliases:
+            raise argparse.ArgumentTypeError(
+                f"Invalid environment '{value}'. Valid choices are: {', '.join(aliases.keys())}"
+            )
         return aliases[normalized_value]
 
     # Custom type function to convert HEX to bytes
@@ -99,15 +117,28 @@ def parse_args():
         "-m",
         "--mode",
         help=(
-            "Mode of execution (choices: 'auto' for Windows Automatic, 'aux' for Auxiliary Key Provided, "
-            "'key' for Decryption Key Provided), 'manual' for Windows Manual. "
-            "Short aliases: -mA (Auto), -mAK (Auxiliary Key), -mDK (Decryption Key), -mM (Manual)"
-            "Default: auto"
+            "Mode of execution (choices: 'live' for Live, 'aux' for Auxiliary Key Provided, "
+            "'key' for SQLCipher Key Provided), 'forensic' for Forensic. "
+            "Short aliases: -mL (Live), -mAK (Auxiliary Key), -mSK (SQLCipher Key), -mF (Forensic)"
+            "Default: live"
         ),
         type=parse_mode,
-        choices=["auto", "aux", "key", "manual"],
-        metavar="{auto|aux|key|manual}",
-        default="auto",
+        choices=["live", "aux", "key", "forensic"],
+        metavar="{live|aux|key|forensic}",
+        default="live",
+    )
+
+    # Define environment argument
+    parser.add_argument(
+        "-e",
+        "--env",
+        help="Environment from which the Signal data was extracted (currently only 'windows' and 'gnome' are supported)."
+        "Short aliases: -eW (Windows), -eG (Gnome)."
+        "Default: windows",
+        type=parse_env,
+        choices=["windows", "gnome"],
+        metavar="{windows|gnome}",
+        default="windows",
     )
 
     # IO arguments
@@ -145,8 +176,22 @@ def parse_args():
     )
     key_group.add_argument("-k", "--key", help="Key in HEX format", type=hex_to_bytes, metavar="<HEX>")
 
-    # DPAPI related arguments
-    # manual_group = parser.add_argument_group("Windows Manual Mode", "Arguments required for manual mode.")
+    # Forensic Mode related arguments
+    forensic_group = parser.add_argument_group("Forensic Mode", "Arguments required for forensic mode.")
+    forensic_group.add_argument(
+        "-p",
+        "--password",
+        help="Gnome Keyring's master password (by default, it is the same as the user account's password)",
+        type=str,
+        metavar="<password>",
+    )
+    forensic_group.add_argument(
+        "-gkf",
+        "--gnome-keyring-file",
+        help="Path to the user's Gnome Keyring file",
+        type=pathlib.Path,
+        metavar="<file>",
+    )
     # manual_group.add_argument("-wS", "--windows-sid", help="Target windows user's SID", metavar="<SID>")
     # manual_group.add_argument("-wP", "--windows-password", help="Target windows user's password", metavar="<password>")
 
@@ -231,16 +276,22 @@ def validate_args(args: argparse.Namespace):
             raise FileNotFoundError(f"Output directory '{args.output}' does not exist and could not be created.") from e
 
     # Validate auto mode
-    if args.mode == "auto":
+    if args.mode == "live":
         if not sys.platform.startswith("win"):
-            raise OSError("Automatic mode is only available on Windows.")
+            raise OSError("Live mode is currently only available on Windows.")
 
     # Validate manual mode arguments
-    if args.mode == "manual":
-        if not args.windows_sid:
-            raise ValueError("Windows User SID is required for manual mode.")
-        if not args.windows_password:
-            raise ValueError("Windows User Password is required for manual mode.")
+    if args.mode == "forensic":
+        if args.env != "gnome":
+            raise ValueError("Forensic mode is only supported for artifacts originating from a Gnome environment.")
+        # if not args.windows_sid:
+        #    raise ValueError("Windows User SID is required for manual mode.")
+        # if not args.windows_password:
+        #    raise ValueError("Windows User Password is required for manual mode.")
+        if not args.password:
+            raise ValueError("Gnome Keyring's master password is required for forensic mode.")
+        if not args.gnome_keyring_file:
+            raise ValueError("Gnome Keyring file is required for forensic mode.")
 
     # Validate key provided mode arguments
     if args.mode in ["aux", "key"]:
@@ -272,41 +323,45 @@ def fetch_aux_key(args: argparse.Namespace):
     if args.mode == "aux":
         return fetch_key_from_args(args)
     else:
-        with args.local_state.open("r") as f:
-            try:
-                data = json.load(f)
-            except json.JSONDecodeError:
-                raise MalformedInputFileError("The Local State file was malformed: Invalid JSON structure.")
-
-            # Validate the presence of "os_crypt" and "encrypted_key"
-            encrypted_key = data.get("os_crypt", {}).get("encrypted_key")
-            if not encrypted_key:
-                raise MalformedInputFileError(
-                    "The Local State file was malformed: Missing the encrypted auxiliary key."
-                )
-
-            # Decode the base64 encoded key and remove the prefix
-            try:
-                encrypted_key = base64.b64decode(encrypted_key)[len(AUX_KEY_PREFIX) :]
-            except ValueError:
-                raise MalformedKeyError("The encrypted key is not a valid base64 string.")
-            except IndexError:
-                raise MalformedKeyError("The encrypted key is malformed.")
-
-            # Check if this is a DPAPI blob
-            if encrypted_key[4:20] != DPAPI_BLOB_GUID.bytes_le:
-                raise MalformedKeyError("The encrypted auxiliary key is not in the expected DPAPI BLOB format.")
-
-            if args.mode == "auto":
+        if args.env == "gnome":
+            # TODO: Logging
+            return gnome_get_aux_key(args.gnome_keyring_file, args.password)
+        else:
+            with args.local_state.open("r") as f:
                 try:
-                    from modules import windows as win
-                except ImportError as e:
-                    raise ImportError("Windows-specific module could not be imported:", e)
-                return win.unprotect_with_dpapi(encrypted_key)
-            elif args.mode == "manual":
-                from modules import manual as manual_mode  # REVIEW: Should this be imported here or at the top?
+                    data = json.load(f)
+                except json.JSONDecodeError:
+                    raise MalformedInputFileError("The Local State file was malformed: Invalid JSON structure.")
 
-                return manual_mode.unprotect_manually(encrypted_key, args.windows_sid, args.windows_password)
+                # Validate the presence of "os_crypt" and "encrypted_key"
+                encrypted_key = data.get("os_crypt", {}).get("encrypted_key")
+                if not encrypted_key:
+                    raise MalformedInputFileError(
+                        "The Local State file was malformed: Missing the encrypted auxiliary key."
+                    )
+
+                # Decode the base64 encoded key and remove the prefix
+                try:
+                    encrypted_key = base64.b64decode(encrypted_key)[len(AUX_KEY_PREFIX) :]
+                except ValueError:
+                    raise MalformedKeyError("The encrypted key is not a valid base64 string.")
+                except IndexError:
+                    raise MalformedKeyError("The encrypted key is malformed.")
+
+                # Check if this is a DPAPI blob
+                if encrypted_key[4:20] != DPAPI_BLOB_GUID.bytes_le:
+                    raise MalformedKeyError("The encrypted auxiliary key is not in the expected DPAPI BLOB format.")
+
+                if args.mode == "live":
+                    try:
+                        from modules import windows as win
+                    except ImportError as e:
+                        raise ImportError("Windows-specific module could not be imported:", e)
+                    return win.unprotect_with_dpapi(encrypted_key)
+                elif args.mode == "forensic":
+                    from modules import manual as manual_mode  # REVIEW: Should this be imported here or at the top?
+
+                    return manual_mode.unprotect_manually(encrypted_key, args.windows_sid, args.windows_password)
     return None
 
 
@@ -328,23 +383,35 @@ def fetch_decryption_key(args: argparse.Namespace, aux_key: bytes):
         except ValueError:
             raise MalformedKeyError("The encrypted decryption key is not a valid HEX string.")
 
-        # Check if the key has the expected prefix
-        if key[: len(DEC_KEY_PREFIX)] != DEC_KEY_PREFIX.encode("utf-8"):
-            raise MalformedKeyError("The encrypted decryption key does not start with the expected prefix.")
-        key = key[len(DEC_KEY_PREFIX) :]
-
         log("Processing the encrypted decryption key...", 2)
 
-        nonce = key[:12]  # Nonce is in the first 12 bytes
-        gcm_tag = key[-16:]  # GCM tag is in the last 16 bytes
-        key = key[12:-16]
+        if args.env == "gnome":
+            log(f"> Key: {bytes_to_hex(key)}", 3)
 
-        log(f"> Nonce: {bytes_to_hex(nonce)}", 3)
-        log(f"> GCM Tag: {bytes_to_hex(gcm_tag)}", 3)
-        log(f"> Key: {bytes_to_hex(key)}", 3)
+            # Check if the key has the expected prefix
+            if key[: len(DEC_KEY_PREFIX_GNOME)] != DEC_KEY_PREFIX_GNOME.encode("utf-8"):
+                raise MalformedKeyError("The encrypted decryption key does not start with the expected prefix.")
+            key = key[len(DEC_KEY_PREFIX_GNOME) :]
 
-        log("Decrypting the decryption key...", 2)
-        decrypted_key = aes_256_gcm_decrypt(aux_key, nonce, key, gcm_tag)
+            log("Decrypting the decryption key...", 2)
+            decrypted_key = gnome_get_sqlcipher_key_from_aux(encrypted_key=key, aux_key=aux_key)
+        else:
+
+            # Check if the key has the expected prefix
+            if key[: len(DEC_KEY_PREFIX)] != DEC_KEY_PREFIX.encode("utf-8"):
+                raise MalformedKeyError("The encrypted decryption key does not start with the expected prefix.")
+            key = key[len(DEC_KEY_PREFIX) :]
+
+            nonce = key[:12]  # Nonce is in the first 12 bytes
+            gcm_tag = key[-16:]  # GCM tag is in the last 16 bytes
+            key = key[12:-16]
+
+            log(f"> Nonce: {bytes_to_hex(nonce)}", 3)
+            log(f"> GCM Tag: {bytes_to_hex(gcm_tag)}", 3)
+            log(f"> Key: {bytes_to_hex(key)}", 3)
+
+            log("Decrypting the decryption key...", 2)
+            decrypted_key = aes_256_gcm_decrypt(aux_key, nonce, key, gcm_tag)
 
         return bytes.fromhex(decrypted_key.decode("utf-8"))
 
