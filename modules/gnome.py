@@ -186,7 +186,7 @@ def gnome_get_sqlcipher_key_from_aux(encrypted_key: bytes, aux_key: bytes) -> by
     log(f"> Encrypted SQLCipher Key: {bytes_to_hex(key)}", 3)
 
     log("Decrypting the decryption key...", 2)
-    return aes_cbc_decrypt(aux_key, b" " * 16, encrypted_key)[:64]  # TODO: Error handling
+    return aes_cbc_decrypt(aux_key, b" " * 16, key)[:64]  # TODO: Error handling
 
 
 def gnome_test_get_sqlcipher_key(keyring_path: str, password: bytes, encrypted_key: bytes):
