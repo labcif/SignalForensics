@@ -17,11 +17,11 @@ from modules import shared_utils as su
 from modules.shared_utils import bytes_to_hex, log, MalformedKeyError, MalformedInputFileError, mime_to_extension
 from modules.crypto import aes_cbc_decrypt, hash_sha256
 from modules.htmlreport import generate_html_report
-from modules.gnome import gnome_get_aux_key, gnome_get_sqlcipher_key_from_aux
+from modules.gnome import gnome_derive_aux_key, gnome_get_aux_key_passphrase, gnome_get_sqlcipher_key_from_aux
 from modules.windows import win_fetch_encrypted_aux_key, unprotect_manually, win_get_sqlcipher_key_from_aux
 
 ####################### CONSTANTS #######################
-VERSION = "2.0"
+VERSION = "2.1"
 
 EMPTY_IV = "AAAAAAAAAAAAAAAAAAAAAA=="  # 16 bytes of 0x00
 
@@ -249,11 +249,11 @@ def validate_args(args: argparse.Namespace):
 
     # Validate OS-specific modes
     if args.mode == "live":
-        if not sys.platform.startswith("win"):
-            raise OSError("Live mode is currently only available on Windows.")
+        if not sys.platform.startswith("win") and not sys.platform.startswith("linux"):
+            raise OSError("Live mode is currently only available on Windows and Linux Gnome.")
     elif args.mode == "forensic":
         if args.env != "gnome":
-            raise ValueError("Forensic mode is only supported for artifacts originating from a Gnome environment.")
+            raise OSError("Forensic mode is only supported for artifacts originating from a Linux Gnome environment.")
 
     # Validate Signal directory
     if not args.dir.is_dir():
@@ -353,9 +353,16 @@ def fetch_aux_key(args: argparse.Namespace):
         return fetch_key_from_args(args)
     else:
         if args.env == "gnome":
-            # TODO: Logging
-            gnome_password = fetch_password_from_args(args)
-            return gnome_get_aux_key(args.gnome_keyring_file, gnome_password)
+            if args.mode == "live":
+                from modules import gnome_live as gnome_live
+
+                gnome_passphrase = gnome_live.gnome_get_aux_key_passphrase_live()
+            elif args.mode == "forensic":
+                gnome_password = fetch_password_from_args(args)
+                gnome_passphrase = gnome_get_aux_key_passphrase(args.gnome_keyring_file, gnome_password)
+            else:
+                raise ValueError("An invalid mode for the Gnome environment was chosen!")
+            return gnome_derive_aux_key(gnome_passphrase)
         else:
             encrypted_aux_key = win_fetch_encrypted_aux_key(args.local_state)
             if args.mode == "live":

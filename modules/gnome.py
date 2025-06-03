@@ -157,7 +157,11 @@ def extract_passphrase(keyring: bytes, num_items: int):
     return passphrase
 
 
-def gnome_get_aux_key(keyring_path: str, password: bytes) -> bytes:
+def gnome_get_aux_key_passphrase(keyring_path: str, password: bytes) -> bytes:
+    """
+    Manually fetches the passphrase required to derive the auxiliary key for Signal from GNOME Keyring.
+    """
+    log("Fetching the passphrase from GNOME Keyring...", 2)
     hash_iterations, salt, encrypted_keyring_data, num_items = process_keyring_file(pathlib.Path(keyring_path))
 
     log("Deriving keyring EVP key...", 2)
@@ -170,6 +174,10 @@ def gnome_get_aux_key(keyring_path: str, password: bytes) -> bytes:
     passphrase = extract_passphrase(keyring, num_items)
     log(f"> Passphrase: {passphrase.decode('utf-8')}", 3)
 
+    return passphrase
+
+
+def gnome_derive_aux_key(passphrase: bytes) -> bytes:
     log("Deriving the auxiliary key...", 2)
     aux_key = pbkdf2_derive_key(algorithm=SHA1(), password=passphrase, salt=b"saltysalt", iterations=1, key_length=16)
     # print(f"Auxiliary Key: {bytes_to_hex(aux_key)}")
@@ -191,7 +199,8 @@ def gnome_get_sqlcipher_key_from_aux(encrypted_key: bytes, aux_key: bytes) -> by
 
 def gnome_test_get_sqlcipher_key(keyring_path: str, password: bytes, encrypted_key: bytes):
 
-    aux_key = gnome_get_aux_key(keyring_path, password)
+    passphrase = gnome_get_aux_key_passphrase(keyring_path, password)
+    aux_key = gnome_derive_aux_key(passphrase)
 
     # Decrypt the decryption key using the auxiliary key
     decryption_key = gnome_get_sqlcipher_key_from_aux(encrypted_key, aux_key).decode("utf-8")  # TODO: Error handling
