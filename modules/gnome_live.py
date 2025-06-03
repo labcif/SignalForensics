@@ -10,7 +10,7 @@ def gnome_get_aux_key_passphrase_live():
     if not collections:
         raise ValueError("No collections found in GNOME Keyring. Could not retrieve the required passphrase.")
 
-    log(f"Searching {len(collections)} collections in GNOME Keyring...", 3)
+    log(f"Searching {len(list(collections))} collections in GNOME Keyring...", 3)
     for collection in collections:
         items = collection.get_all_items()
         for item in items:
