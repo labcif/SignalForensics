@@ -1,5 +1,5 @@
 import secretstorage
-from shared_utils import log
+from modules.shared_utils import log
 
 
 def gnome_get_aux_key_passphrase_live():
