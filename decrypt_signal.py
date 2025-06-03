@@ -186,6 +186,20 @@ def parse_args():
         metavar="<password>",
     )
     forensic_group.add_argument(
+        "-pb",
+        "--password-bytes",
+        help="Gnome Keyring's master password in HEX format",
+        type=hex_to_bytes,
+        metavar="<bytes>",
+    )
+    forensic_group.add_argument(
+        "-pbf",
+        "--password-bytes-file",
+        help="Path to the file containing the Gnome Keyring's master password in HEX format",
+        type=pathlib.Path,
+        metavar="<file>",
+    )
+    forensic_group.add_argument(
         "-gkf",
         "--gnome-keyring-file",
         help="Path to the user's Gnome Keyring file",
@@ -292,8 +306,14 @@ def validate_args(args: argparse.Namespace):
         #    raise ValueError("Windows User SID is required for manual mode.")
         # if not args.windows_password:
         #    raise ValueError("Windows User Password is required for manual mode.")
-        if not args.password:
+        if args.password_bytes_file:
+            if not args.password_bytes_file.is_file():
+                raise FileNotFoundError(
+                    f"Password bytes file '{args.password_bytes_file}' does not exist or is not a file."
+                )
+        elif not args.password and not args.password_bytes:
             raise ValueError("Gnome Keyring's master password is required for forensic mode.")
+
         if not args.gnome_keyring_file:
             raise ValueError("Gnome Keyring file is required for forensic mode.")
 
@@ -313,13 +333,34 @@ def validate_args(args: argparse.Namespace):
 ####################### KEY FETCHING #######################
 
 
-def fetch_key_from_args(args: argparse.Namespace):
-    # If a key file is provided, read the key from the file
-    if args.key_file:
-        log("Reading the key from the file...", 2)
-        with args.key_file.open("r") as f:
+def fetch_hex_or_file_content_from_args(args_file, args_key, content="key"):
+    """
+    Fetches content from either a file or a hex string provided in the arguments.
+    If a file is provided, it reads the content of the file and returns it as bytes.
+    If a hex string is provided, it converts it to bytes and returns it.
+    """
+    # If a file is provided, read contents from the file
+    if args_file:
+        log(f"Reading the {content} from the file...", 2)
+        with args_file.open("r") as f:
             return bytes.fromhex(f.read().strip())
-    return args.key
+    elif args_key:
+        return args_key
+    else:
+        raise ValueError(f"No {content} provided. Please provide either a {content} file or a hex string.")
+
+
+def fetch_key_from_args(args: argparse.Namespace):
+    return fetch_hex_or_file_content_from_args(args.key_file, args.key, content="key")
+
+
+def fetch_password_from_args(args: argparse.Namespace):
+    if args.password_bytes_file or args.password_bytes:
+        return fetch_hex_or_file_content_from_args(args.password_bytes_file, args.password_bytes, content="password")
+    else:
+        if not args.password:
+            raise ValueError("No password provided. Please provide either a password or a password bytes file.")
+        return args.password.encode("utf-8")
 
 
 def fetch_aux_key(args: argparse.Namespace):
@@ -329,7 +370,8 @@ def fetch_aux_key(args: argparse.Namespace):
     else:
         if args.env == "gnome":
             # TODO: Logging
-            return gnome_get_aux_key(args.gnome_keyring_file, args.password)
+            gnome_password = fetch_password_from_args(args)
+            return gnome_get_aux_key(args.gnome_keyring_file, gnome_password)
         else:
             with args.local_state.open("r") as f:
                 try:
@@ -1423,9 +1465,10 @@ def main():
     else:
         log("[i] Fetching auxiliary key...", 1)
         aux_key = fetch_aux_key(args)
-        if not aux_key or len(aux_key) != 32:
-            raise MalformedKeyError("The auxiliary key is not 32 bytes long.")
         log(f"> Auxiliary Key: {bytes_to_hex(aux_key)}", 2)
+        correct_aux_key_length = 32 if args.env == "windows" else 16
+        if not aux_key or len(aux_key) != correct_aux_key_length:
+            raise MalformedKeyError(f"The auxiliary key is not {correct_aux_key_length} bytes long.")
         log("[i] Auxiliary key loaded", 1)
 
         log("[i] Decrypting the decryption key...", 1)
