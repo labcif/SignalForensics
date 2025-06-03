@@ -179,9 +179,9 @@ def gnome_get_aux_key(keyring_path: str, password: bytes) -> bytes:
 
 def gnome_get_sqlcipher_key_from_aux(encrypted_key: bytes, aux_key: bytes) -> bytes:
     # Check if the key has the expected prefix
-    if key[: len(DEC_KEY_PREFIX_GNOME)] != DEC_KEY_PREFIX_GNOME.encode("utf-8"):
+    if encrypted_key[: len(DEC_KEY_PREFIX_GNOME)] != DEC_KEY_PREFIX_GNOME.encode("utf-8"):
         raise MalformedKeyError("The encrypted decryption key does not start with the expected prefix.")
-    key = key[len(DEC_KEY_PREFIX_GNOME) :]
+    key = encrypted_key[len(DEC_KEY_PREFIX_GNOME) :]
 
     log(f"> Encrypted SQLCipher Key: {bytes_to_hex(key)}", 3)
 
