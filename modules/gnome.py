@@ -27,6 +27,8 @@ def process_keyring_file(keyring_path: pathlib.Path):
     with keyring_path.open("rb") as f:
         data = f.read()
 
+    log(f"Processing keyring file...", 2)
+
     # Check if the file prefix is correct
     idx = len(GNOME_KEYRING_PREFIX)
     if data[:idx] != GNOME_KEYRING_PREFIX:
@@ -39,12 +41,14 @@ def process_keyring_file(keyring_path: pathlib.Path):
 
     # Get the keyring hash_iterations
     hash_iterations = struct.unpack(">I", data[idx : idx + 4])[0]
+    log(f"> Hash Iterations: {hash_iterations}", 3)
     idx += 4
 
     # Get the keyring salt
     salt = data[idx : idx + 8]
     idx += 8 + 4 * 4
 
+    log(f"Skipping non-essential data...", 3)
     # Get num items
     num_items = struct.unpack(">I", data[idx : idx + 4])[0]
     idx += 4
@@ -69,6 +73,8 @@ def process_keyring_file(keyring_path: pathlib.Path):
             else:
                 # Skip guint32 hash
                 idx += 4
+
+    log(f"Extracting encrypted keyring data...", 3)
 
     # Get number of encrypted bytes
     num_encrypted_bytes = struct.unpack(">I", data[idx : idx + 4])[0]
@@ -154,15 +160,18 @@ def extract_passphrase(keyring: bytes, num_items: int):
 def gnome_get_aux_key(keyring_path: str, password: bytes) -> bytes:
     hash_iterations, salt, encrypted_keyring_data, num_items = process_keyring_file(pathlib.Path(keyring_path))
 
+    log("Deriving keyring EVP key...", 2)
     keyring_key = derive_evp_key(password=password, salt=salt, key_len=16, iterations=hash_iterations)
+    log(f"> Keyring Key: {bytes_to_hex(keyring_key)}", 3)
+    log("Decrypting the keyring data...", 2)
     keyring = decrypt_keyring_data(encrypted_keyring_data, keyring_key)
 
+    log("Extracting the passphrase from the keyring data...", 2)
     passphrase = extract_passphrase(keyring, num_items)
+    log(f"> Passphrase: {passphrase.decode('utf-8')}", 3)
 
-    # print(f"Extracted Passphrase: {passphrase.decode('utf-8')}")
-
+    log("Deriving the auxiliary key...", 2)
     aux_key = pbkdf2_derive_key(algorithm=SHA1(), password=passphrase, salt=b"saltysalt", iterations=1, key_length=16)
-
     # print(f"Auxiliary Key: {bytes_to_hex(aux_key)}")
 
     return aux_key
