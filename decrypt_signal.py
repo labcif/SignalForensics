@@ -459,6 +459,8 @@ def fetch_decryption_key(args: argparse.Namespace, aux_key: bytes):
             log("Decrypting the decryption key...", 2)
             decrypted_key = aes_256_gcm_decrypt(aux_key, nonce, key, gcm_tag)
 
+        log("repr(SQLCipher Key): " + repr(decrypted_key.decode("utf-8")), 3)
+
         return bytes.fromhex(decrypted_key.decode("utf-8"))
 
 
