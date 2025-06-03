@@ -36,6 +36,7 @@ EMPTY_IV = "AAAAAAAAAAAAAAAAAAAAAA=="  # 16 bytes of 0x00
 ATTACHMENT_FOLDER = pathlib.Path("attachments.noindex")
 AVATARS_FOLDER = pathlib.Path("avatars.noindex")
 DRAFTS_FOLDER = pathlib.Path("drafts.noindex")
+DOWNLOADS_FOLDER = pathlib.Path("downloads.noindex")
 
 ####################### EXCEPTIONS #######################
 
@@ -550,12 +551,6 @@ def handle_avatar(convJson, convType):
     return
 
 
-def downloadPath_to_path(downloadPath):
-    if downloadPath is None:
-        return None
-    return downloadPath[0:2] + "/" + downloadPath
-
-
 def process_attachment(args: argparse.Namespace, attachments_dir, attachment, statuses):
     if attachment.get("contentType", "") == "text/x-signal-story":
         return
@@ -563,7 +558,13 @@ def process_attachment(args: argparse.Namespace, attachments_dir, attachment, st
     if "path" in attachment:
         subpath = attachment["path"]
     elif "downloadPath" in attachment:
-        subpath = downloadPath_to_path(attachment["downloadPath"])
+        subpath = attachment["downloadPath"]
+        statuses["error"] += 1
+        log(
+            f"[!] Skipping attachment with downloadPath: {DOWNLOADS_FOLDER}/{subpath}. Signal Desktop currently cannot manually decrypt this attachment.",
+            2,
+        )
+        return
     else:
         statuses["error"] += 1
         fnForError = attachment.get("fileName", "unknown")
@@ -582,7 +583,11 @@ def process_attachment(args: argparse.Namespace, attachments_dir, attachment, st
         size = int(attachment["size"])
 
         # Encrypted attachment path
-        folder = ATTACHMENT_FOLDER if "path_pref" not in attachment else attachment["path_pref"]
+        folder = (
+            (ATTACHMENT_FOLDER if "path" in attachment else DOWNLOADS_FOLDER)
+            if "path_pref" not in attachment
+            else attachment["path_pref"]
+        )
         enc_attachment_path = args.dir / folder / subpath
 
         # Check if the encrypted attachment is present on the expected path
@@ -1216,9 +1221,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                                     [
                                         msgId,
                                         "attachment",
-                                        attachment.get(
-                                            "path", downloadPath_to_path(attachment.get("downloadPath", None))
-                                        ),
+                                        attachment.get("path", None),
                                         attachment.get("fileName", None),
                                         attContType,
                                     ]
@@ -1231,7 +1234,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                                 [
                                     msgId,
                                     "preview",
-                                    previewImg.get("path", downloadPath_to_path(previewImg.get("downloadPath", None))),
+                                    previewImg.get("path", None),
                                     None,
                                     previewImg.get("contentType", None),
                                 ]
