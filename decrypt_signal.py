@@ -550,10 +550,26 @@ def handle_avatar(convJson, convType):
     return
 
 
+def downloadPath_to_path(downloadPath):
+    if downloadPath is None:
+        return None
+    return downloadPath[0:2] + "/" + downloadPath
+
+
 def process_attachment(args: argparse.Namespace, attachments_dir, attachment, statuses):
     if attachment.get("contentType", "") == "text/x-signal-story":
         return
-    subpath = attachment["path"]
+
+    if "path" in attachment:
+        subpath = attachment["path"]
+    elif "downloadPath" in attachment:
+        subpath = downloadPath_to_path(attachment["downloadPath"])
+    else:
+        statuses["error"] += 1
+        fnForError = attachment.get("fileName", "unknown")
+        log(f"[!] Could not find a path for an attachment with file name {fnForError}", 3)
+        return
+
     try:
         # Fetch attachment crypto data
         key = base64.b64decode(attachment["localKey"])[:32]
@@ -1054,7 +1070,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     ]
     MSGS_VERSION_HISTS_HEADERS = ["Message ID", "Version Received At", "Body"]
     MSGS_REACTIONS_HEADERS = ["Message ID", "Reactor's Conversation ID", "Reactor's Name", "Reaction", "Timestamp"]
-    MSGS_ATTACHMENTS_HEADERS = ["Message ID", "Type", "Path", "Content Type"]
+    MSGS_ATTACHMENTS_HEADERS = ["Message ID", "Type", "Path", "Original File Name", "Content Type"]
 
     GROUPS_CHANGES_HEADERS = [
         "Message ID",
@@ -1200,7 +1216,10 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                                     [
                                         msgId,
                                         "attachment",
-                                        attachment.get("path", None),
+                                        attachment.get(
+                                            "path", downloadPath_to_path(attachment.get("downloadPath", None))
+                                        ),
+                                        attachment.get("fileName", None),
                                         attContType,
                                     ]
                                 )
@@ -1212,7 +1231,8 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                                 [
                                     msgId,
                                     "preview",
-                                    previewImg.get("path", None),
+                                    previewImg.get("path", downloadPath_to_path(previewImg.get("downloadPath", None))),
+                                    None,
                                     previewImg.get("contentType", None),
                                 ]
                             )
