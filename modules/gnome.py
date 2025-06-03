@@ -1,8 +1,12 @@
 from modules.crypto import derive_evp_key, aes_cbc_decrypt, pbkdf2_derive_key, hash_md5
 from cryptography.hazmat.primitives.hashes import SHA1
-from modules.shared_utils import bytes_to_hex
+from modules.shared_utils import bytes_to_hex, MalformedKeyError, log
 import pathlib
 import struct
+
+GNOME_KEYRING_PREFIX = b"GnomeKeyring\n\r\0\n"
+SIGNAL_BYTE_SEQ = bytes.fromhex("0000000B6170706C69636174696F6E00000000000000065369676E616C")
+DEC_KEY_PREFIX_GNOME = "v11"
 
 
 # Skip the string length in a keyring file
@@ -24,7 +28,6 @@ def process_keyring_file(keyring_path: pathlib.Path):
         data = f.read()
 
     # Check if the file prefix is correct
-    GNOME_KEYRING_PREFIX = b"GnomeKeyring\n\r\0\n"
     idx = len(GNOME_KEYRING_PREFIX)
     if data[:idx] != GNOME_KEYRING_PREFIX:
         raise ValueError("Invalid keyring file format.")
@@ -92,7 +95,6 @@ def extract_passphrase(keyring: bytes, num_items: int):
     # Will use an unorthodox way to check if we decrypted the keyring correctly
 
     # A keyring with Signal's auxiliary key will include this byte sequence
-    SIGNAL_BYTE_SEQ = bytes.fromhex("0000000B6170706C69636174696F6E00000000000000065369676E616C")
     if SIGNAL_BYTE_SEQ not in keyring:
         raise ValueError(
             "Decrypted keyring does not contain the expected byte sequence. Either the keyring is not decrypted correctly or the keyring does not contain Signal's auxiliary key."
@@ -149,10 +151,6 @@ def extract_passphrase(keyring: bytes, num_items: int):
     return passphrase
 
 
-def gnome_get_sqlcipher_key_from_aux(encrypted_key: bytes, aux_key: bytes) -> bytes:
-    return aes_cbc_decrypt(aux_key, b" " * 16, encrypted_key)[:64]  # TODO: Error handling
-
-
 def gnome_get_aux_key(keyring_path: str, password: bytes) -> bytes:
     hash_iterations, salt, encrypted_keyring_data, num_items = process_keyring_file(pathlib.Path(keyring_path))
 
@@ -168,6 +166,18 @@ def gnome_get_aux_key(keyring_path: str, password: bytes) -> bytes:
     # print(f"Auxiliary Key: {bytes_to_hex(aux_key)}")
 
     return aux_key
+
+
+def gnome_get_sqlcipher_key_from_aux(encrypted_key: bytes, aux_key: bytes) -> bytes:
+    # Check if the key has the expected prefix
+    if key[: len(DEC_KEY_PREFIX_GNOME)] != DEC_KEY_PREFIX_GNOME.encode("utf-8"):
+        raise MalformedKeyError("The encrypted decryption key does not start with the expected prefix.")
+    key = key[len(DEC_KEY_PREFIX_GNOME) :]
+
+    log(f"> Encrypted SQLCipher Key: {bytes_to_hex(key)}", 3)
+
+    log("Decrypting the decryption key...", 2)
+    return aes_cbc_decrypt(aux_key, b" " * 16, encrypted_key)[:64]  # TODO: Error handling
 
 
 def gnome_test_get_sqlcipher_key(keyring_path: str, password: bytes, encrypted_key: bytes):

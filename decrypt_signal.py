@@ -3,10 +3,8 @@ import pathlib
 import os
 import json
 import base64
-import uuid
 import random
 import string
-import mimetypes
 import sys
 import csv
 from datetime import datetime
@@ -16,20 +14,14 @@ from collections import defaultdict
 import sqlcipher3
 
 from modules import shared_utils as su
-from modules.shared_utils import bytes_to_hex, log, MalformedKeyError, mime_to_extension
-from modules.crypto import aes_256_gcm_decrypt, aes_cbc_decrypt, hash_sha256
+from modules.shared_utils import bytes_to_hex, log, MalformedKeyError, MalformedInputFileError, mime_to_extension
+from modules.crypto import aes_cbc_decrypt, hash_sha256
 from modules.htmlreport import generate_html_report
 from modules.gnome import gnome_get_aux_key, gnome_get_sqlcipher_key_from_aux
+from modules.windows import win_fetch_encrypted_aux_key, unprotect_manually, win_get_sqlcipher_key_from_aux
 
 ####################### CONSTANTS #######################
-VERSION = "1.0"
-
-AUX_KEY_PREFIX = "DPAPI"
-
-DEC_KEY_PREFIX = "v10"
-DEC_KEY_PREFIX_GNOME = "v11"
-
-DPAPI_BLOB_GUID = uuid.UUID("df9d8cd0-1501-11d1-8c7a-00c04fc297eb")
+VERSION = "2.0"
 
 EMPTY_IV = "AAAAAAAAAAAAAAAAAAAAAA=="  # 16 bytes of 0x00
 
@@ -37,15 +29,6 @@ ATTACHMENT_FOLDER = pathlib.Path("attachments.noindex")
 AVATARS_FOLDER = pathlib.Path("avatars.noindex")
 DRAFTS_FOLDER = pathlib.Path("drafts.noindex")
 DOWNLOADS_FOLDER = pathlib.Path("downloads.noindex")
-
-####################### EXCEPTIONS #######################
-
-
-class MalformedInputFileError(Exception):
-    """Exception raised for a malformed input file."""
-
-    pass
-
 
 ####################### I/O ARGS #######################
 
@@ -374,41 +357,15 @@ def fetch_aux_key(args: argparse.Namespace):
             gnome_password = fetch_password_from_args(args)
             return gnome_get_aux_key(args.gnome_keyring_file, gnome_password)
         else:
-            with args.local_state.open("r") as f:
+            encrypted_aux_key = win_fetch_encrypted_aux_key(args.local_state)
+            if args.mode == "live":
                 try:
-                    data = json.load(f)
-                except json.JSONDecodeError:
-                    raise MalformedInputFileError("The Local State file was malformed: Invalid JSON structure.")
-
-                # Validate the presence of "os_crypt" and "encrypted_key"
-                encrypted_key = data.get("os_crypt", {}).get("encrypted_key")
-                if not encrypted_key:
-                    raise MalformedInputFileError(
-                        "The Local State file was malformed: Missing the encrypted auxiliary key."
-                    )
-
-                # Decode the base64 encoded key and remove the prefix
-                try:
-                    encrypted_key = base64.b64decode(encrypted_key)[len(AUX_KEY_PREFIX) :]
-                except ValueError:
-                    raise MalformedKeyError("The encrypted key is not a valid base64 string.")
-                except IndexError:
-                    raise MalformedKeyError("The encrypted key is malformed.")
-
-                # Check if this is a DPAPI blob
-                if encrypted_key[4:20] != DPAPI_BLOB_GUID.bytes_le:
-                    raise MalformedKeyError("The encrypted auxiliary key is not in the expected DPAPI BLOB format.")
-
-                if args.mode == "live":
-                    try:
-                        from modules import windows as win
-                    except ImportError as e:
-                        raise ImportError("Windows-specific module could not be imported:", e)
-                    return win.unprotect_with_dpapi(encrypted_key)
-                elif args.mode == "forensic":
-                    from modules import manual as manual_mode  # REVIEW: Should this be imported here or at the top?
-
-                    return manual_mode.unprotect_manually(encrypted_key, args.windows_sid, args.windows_password)
+                    from modules import windows_live as win_live
+                except ImportError as e:
+                    raise ImportError("Windows-specific module could not be imported:", e)
+                return win_live.unprotect_with_dpapi(encrypted_aux_key)
+            elif args.mode == "forensic":
+                return unprotect_manually(encrypted_aux_key, args.windows_sid, args.windows_password)
     return None
 
 
@@ -433,34 +390,11 @@ def fetch_decryption_key(args: argparse.Namespace, aux_key: bytes):
         log("Processing the encrypted decryption key...", 2)
 
         if args.env == "gnome":
-            log(f"> Key: {bytes_to_hex(key)}", 3)
-
-            # Check if the key has the expected prefix
-            if key[: len(DEC_KEY_PREFIX_GNOME)] != DEC_KEY_PREFIX_GNOME.encode("utf-8"):
-                raise MalformedKeyError("The encrypted decryption key does not start with the expected prefix.")
-            key = key[len(DEC_KEY_PREFIX_GNOME) :]
-
-            log("Decrypting the decryption key...", 2)
             decrypted_key = gnome_get_sqlcipher_key_from_aux(encrypted_key=key, aux_key=aux_key)
         else:
+            decrypted_key = win_get_sqlcipher_key_from_aux(encrypted_key=key, aux_key=aux_key)
 
-            # Check if the key has the expected prefix
-            if key[: len(DEC_KEY_PREFIX)] != DEC_KEY_PREFIX.encode("utf-8"):
-                raise MalformedKeyError("The encrypted decryption key does not start with the expected prefix.")
-            key = key[len(DEC_KEY_PREFIX) :]
-
-            nonce = key[:12]  # Nonce is in the first 12 bytes
-            gcm_tag = key[-16:]  # GCM tag is in the last 16 bytes
-            key = key[12:-16]
-
-            log(f"> Nonce: {bytes_to_hex(nonce)}", 3)
-            log(f"> GCM Tag: {bytes_to_hex(gcm_tag)}", 3)
-            log(f"> Key: {bytes_to_hex(key)}", 3)
-
-            log("Decrypting the decryption key...", 2)
-            decrypted_key = aes_256_gcm_decrypt(aux_key, nonce, key, gcm_tag)
-
-        log("repr(SQLCipher Key): " + repr(decrypted_key.decode("utf-8")), 3)
+        log("> repr(SQLCipher Key): " + repr(decrypted_key.decode("utf-8")), 3)
 
         return bytes.fromhex(decrypted_key.decode("utf-8"))
 
