@@ -149,11 +149,11 @@ def extract_passphrase(keyring: bytes, num_items: int):
     return passphrase
 
 
-def gnome_get_sqlcipher_key_from_aux(encrypted_key: bytes, aux_key: bytes):
-    return aes_cbc_decrypt(aux_key, b" " * 16, encrypted_key).decode("utf-8")  # TODO: Error handling
+def gnome_get_sqlcipher_key_from_aux(encrypted_key: bytes, aux_key: bytes) -> bytes:
+    return aes_cbc_decrypt(aux_key, b" " * 16, encrypted_key)  # TODO: Error handling
 
 
-def gnome_get_aux_key(keyring_path: str, password: bytes):
+def gnome_get_aux_key(keyring_path: str, password: bytes) -> bytes:
     hash_iterations, salt, encrypted_keyring_data, num_items = process_keyring_file(pathlib.Path(keyring_path))
 
     keyring_key = derive_evp_key(password=password, salt=salt, key_len=16, iterations=hash_iterations)
@@ -175,7 +175,7 @@ def gnome_test_get_sqlcipher_key(keyring_path: str, password: bytes, encrypted_k
     aux_key = gnome_get_aux_key(keyring_path, password)
 
     # Decrypt the decryption key using the auxiliary key
-    decryption_key = gnome_get_sqlcipher_key_from_aux(encrypted_key, aux_key)  # TODO: Error handling
+    decryption_key = gnome_get_sqlcipher_key_from_aux(encrypted_key, aux_key).decode("utf-8")  # TODO: Error handling
 
     # print(f"Decryption Key: {decryption_key}")
 
