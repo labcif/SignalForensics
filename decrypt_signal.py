@@ -260,9 +260,12 @@ def validate_args(args: argparse.Namespace):
         if not args.config.is_file():
             raise FileNotFoundError(f"Signal's configuration file '{args.config}' does not exist or is not a file.")
 
-        # Check for Signal's local state file
-        if not args.local_state.is_file():
-            raise FileNotFoundError(f"Signal's local state file '{args.local_state}' does not exist or is not a file.")
+        if args.env == "windows":
+            # Check for Signal's local state file
+            if not args.local_state.is_file():
+                raise FileNotFoundError(
+                    f"Signal's local state file '{args.local_state}' does not exist or is not a file."
+                )
 
     # Validate output directory
     if not args.output:

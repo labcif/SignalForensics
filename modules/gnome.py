@@ -170,7 +170,7 @@ def gnome_get_aux_key(keyring_path: str, password: bytes):
     return aux_key
 
 
-def gnome_get_sqlcipher_key(keyring_path: str, password: bytes, encrypted_key: bytes):
+def gnome_test_get_sqlcipher_key(keyring_path: str, password: bytes, encrypted_key: bytes):
 
     aux_key = gnome_get_aux_key(keyring_path, password)
 
