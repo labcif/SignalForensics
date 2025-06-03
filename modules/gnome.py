@@ -150,7 +150,7 @@ def extract_passphrase(keyring: bytes, num_items: int):
 
 
 def gnome_get_sqlcipher_key_from_aux(encrypted_key: bytes, aux_key: bytes) -> bytes:
-    return aes_cbc_decrypt(aux_key, b" " * 16, encrypted_key)[:32]  # TODO: Error handling
+    return aes_cbc_decrypt(aux_key, b" " * 16, encrypted_key)[:64]  # TODO: Error handling
 
 
 def gnome_get_aux_key(keyring_path: str, password: bytes) -> bytes:
