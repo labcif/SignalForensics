@@ -21,7 +21,7 @@ from modules.gnome import gnome_derive_aux_key, gnome_get_aux_key_passphrase, gn
 from modules.windows import win_fetch_encrypted_aux_key, unprotect_manually, win_get_sqlcipher_key_from_aux
 
 ####################### CONSTANTS #######################
-VERSION = "2.1"
+VERSION = "2.1.1"
 
 EMPTY_IV = "AAAAAAAAAAAAAAAAAAAAAA=="  # 16 bytes of 0x00
 
@@ -62,10 +62,10 @@ def parse_args():
             "forensic": "forensic",
             "aux": "aux",
             "key": "key",
-            "a": "live",
+            "l": "live",
             "f": "forensic",
-            "ak": "aux",
-            "sk": "key",
+            "a": "aux",
+            "k": "key",
         }
         normalized_value = value.lower()
         if normalized_value not in aliases:
@@ -103,7 +103,7 @@ def parse_args():
         help=(
             "Mode of execution (choices: 'live' for Live, 'aux' for Auxiliary Key Provided, "
             "'key' for SQLCipher Key Provided), 'forensic' for Forensic. "
-            "Short aliases: -mL (Live), -mAK (Auxiliary Key), -mSK (SQLCipher Key), -mF (Forensic)"
+            "Short aliases: -mL (Live), -mA (Auxiliary Key), -mK (SQLCipher Key), -mF (Forensic)"
             "Default: live"
         ),
         type=parse_mode,
