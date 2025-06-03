@@ -249,6 +249,14 @@ def parse_args():
 # Validate arguments
 def validate_args(args: argparse.Namespace):
 
+    # Validate OS-specific modes
+    if args.mode == "live":
+        if not sys.platform.startswith("win"):
+            raise OSError("Live mode is currently only available on Windows.")
+    elif args.mode == "forensic":
+        if args.env != "gnome":
+            raise ValueError("Forensic mode is only supported for artifacts originating from a Gnome environment.")
+
     # Validate Signal directory
     if not args.dir.is_dir():
         raise FileNotFoundError(f"Signal directory '{args.dir}' does not exist or is not a directory.")
@@ -278,15 +286,8 @@ def validate_args(args: argparse.Namespace):
         except OSError as e:
             raise FileNotFoundError(f"Output directory '{args.output}' does not exist and could not be created.") from e
 
-    # Validate auto mode
-    if args.mode == "live":
-        if not sys.platform.startswith("win"):
-            raise OSError("Live mode is currently only available on Windows.")
-
     # Validate manual mode arguments
     if args.mode == "forensic":
-        if args.env != "gnome":
-            raise ValueError("Forensic mode is only supported for artifacts originating from a Gnome environment.")
         # if not args.windows_sid:
         #    raise ValueError("Windows User SID is required for manual mode.")
         # if not args.windows_password:
@@ -1387,6 +1388,7 @@ def print_config(args: argparse.Namespace):
     """Prints the script's current configuration."""
     log("----------------------==<[ CONFIG ]>==----------------------")
     log(f"Mode: {args.mode}")
+    log(f"Environment: {args.env}")
     log(f"Signal Directory: {args.dir}")
     if args.output:
         log(f"Output Directory: {args.output}")
