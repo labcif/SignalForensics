@@ -697,9 +697,11 @@ def export_attachments(cursor, args: argparse.Namespace):
 
     log(f"[i] Exported {statuses['exported']} attachments")
     if statuses["integrity_error"] > 0:
-        log(f"[!] {statuses['integrity_error']} attachments failed integrity check")
+        log(
+            f"[!] {statuses['integrity_error']} attachments failed integrity check (enable verbose mode 3 for more details)"
+        )
     if statuses["error"] > 0:
-        log(f"[!] Failed to export {statuses['error']} attachments")
+        log(f"[!] Failed to export {statuses['error']} attachments (enable verbose mode 3 for more details)")
 
 
 ####################### CSV/HTML REPORTS #######################
