@@ -41,7 +41,7 @@ def parse_args():
         usage="""%(prog)s [-m live] [-e <environment>] -d <signal_dir> [-o <output_dir>] [OPTIONS]
         %(prog)s -m aux [-e <environment>] -d <signal_dir> [-o <output_dir>] [-kf <file> | -k <HEX>] [OPTIONS]
         %(prog)s -m key [-e <environment>] -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
-        %(prog)s -m forensic [-e <environment>] -d <signal_dir> [-o <output_dir>] -p <password> [OPTIONS]
+        %(prog)s -m forensic -e gnome -d <signal_dir> [-o <output_dir>] -p <password> -gkf <gnome_keyring_file> [OPTIONS]
         """,
     )
     # [-d <signal_dir> | (-c <file> -ls <file>)]
