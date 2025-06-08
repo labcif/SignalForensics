@@ -26,3 +26,9 @@ class MalformedKeyError(Exception):
     """Exception raised for a malformed key."""
 
     pass
+
+
+class MalformedInputFileError(Exception):
+    """Exception raised for a malformed input file."""
+
+    pass

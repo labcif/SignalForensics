@@ -11,10 +11,7 @@ This project is based on the work done in the article titled "Decrypting Message
 ## 🚀 Features
 
 - Automated decryption of Signal Desktop artifacts
-- Multiple execution modes:
-  - **Automatic**: Fully automatic. Must be run on the same environment as Signal Desktop. Windows only.
-  - **Auxiliary Key Provided**: Requires the path to the data directory and the decrypted auxiliary key. Can be run on any environment.
-  - **Decryption Key Provided**: Requires the path to the data directory and the decrypted SQLCipher key. Can be run on any environment.
+- Multiple execution modes and support for different environments
 - CSV and HTML report generation
 - Quiet mode and customizable verbosity
 - Optional skipping of decryption/report steps
@@ -49,27 +46,82 @@ python SignalForensics.pyz -h
 
 ---
 
+## 🧑‍💻 Execution Modes and Environments
+
+SignalDecryptor supports four execution modes:
+
+- **Live** (`-m live`)  
+  In this mode, the script attempts to decrypt Signal's auxiliary key using operating system–specific services available on the machine where Signal Desktop was originally used.
+
+  - On **Windows**, it uses DPAPI to decrypt the key directly from the `Local State` file.
+  - On **GNOME (Linux)**, it accesses the key via the GNOME Keyring, using the currently logged-in user session.
+  - This mode requires execution **within the original user account and environment** (same machine and OS profile as Signal Desktop).
+
+- **Forensic** (`-m forensic`)  
+  This mode allows analysts to decrypt Signal artifacts **outside the original system**, provided they have access to:
+
+  - The GNOME Keyring file (usually `login.keyring`)
+  - The user's master password (or its raw hex form)  
+    The script uses these to derive the auxiliary key and subsequently decrypt the SQLCipher key.
+    > ⚠️ **Note:** This mode is currently not available for **Windows**.
+
+- **Auxiliary Key Provided** (`-m aux`)  
+  In this mode, the user manually supplies the **auxiliary key** (either directly via `--key` or via a file with `--key-file`).  
+  The script then decrypts the SQLCipher key stored in Signal's `config.json` using this auxiliary key.  
+  This allows full offline decryption of databases and attachments, without needing access to OS-specific secrets or Keyring.
+
+- **SQLCipher Key Provided** (`-m key`)  
+  In this most direct mode, the user provides the **SQLCipher key** (the key that directly decrypts Signal’s database).  
+  This bypasses the need to decrypt anything from the `config.json` or derive keys — the script uses the supplied key immediately to decrypt the database and extract artifacts.
+  > ⚠️ This mode assumes you already possess the exact SQLCipher key used by Signal.
+
+### Required Environment Flag
+
+Each mode requires you to specify the **environment** from which the Signal data was acquired, using the `--env` or `-e` argument. Currently supported environments are:
+
+- `windows`: Standard Signal Desktop installation on Windows
+- `gnome`: Signal Desktop installation on Linux using GNOME Keyring
+
+### Compatibility Matrix
+
+| Execution Mode         | Windows | GNOME |
+| ---------------------- | ------- | ----- |
+| Live                   | ✅      | ✅    |
+| Forensic               | ❌      | ✅    |
+| Auxiliary Key Provided | ✅      | ✅    |
+| SQLCipher Key Provided | ✅      | ✅    |
+
+---
+
 ## 🧑‍💻 Usage
 
 **Basic syntax:**
 
 ```bash
-SignalForensics [-m auto] -d <signal_dir> [-o <output_dir>] [OPTIONS]
-SignalForensics -m aux -d <signal_dir> [-o <output_dir>] [-kf <file> | -k <HEX>] [OPTIONS]
-SignalForensics -m key -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
+SignalForensics [-m live] [-e <environment>] -d <signal_dir> [-o <output_dir>] [OPTIONS]
+SignalForensics -m aux [-e <environment>] -d <signal_dir> [-o <output_dir>] [-kf <file> | -k <HEX>] [OPTIONS]
+SignalForensics -m key [-e <environment>] -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
+SignalForensics -m forensic -e gnome -d <signal_dir> [-o <output_dir>] -p <password> -gkf <gnome_keyring_file> [OPTIONS]
 ```
 
 **Examples:**
 
-- Auto mode (Windows only):
+- Live Mode:
   ```bash
-  SignalForensics -m auto -d "C:\Users\TheUser\AppData\Roaming\Signal" -o output_folder
+  SignalForensics -m live -d "C:\Users\TheUser\AppData\Roaming\Signal" -o output_folder
   ```
-- Auxiliary Key Provided:
+- Forensic Mode:
+  ```bash
+  SignalDecryptor -m forensic -e gnome -d ~/.config/Signal \
+  -p 123456 \
+  -gkf ~/.local/share/keyrings/login.keyring \
+  -o output_dir
+  ```
+- Auxiliary Key Provided Mode:
   ```bash
   SignalForensics -m aux -d signal_data/ -kf aux_key.txt -o output_folder
   ```
-- Decryption Key Provided:
+- Decryption Key Provided Mode:
   ```bash
   SignalForensics -m key -d signal_data/ -k 9a325c73... -o output_folder
   ```
@@ -91,8 +143,14 @@ SignalForensics -m key -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [
 
 - `-d`, `--dir`: Path to Signal's data directory
 - `-o`, `--output`: Output directory (optional; disables decryption if not provided)
-- `-kf`, `--key-file`: Path to file containing key as a hex string
-- `-k`, `--key`: Provide key directly as a hex string
+- `-m`, `--mode`: Execution mode (`live`, `forensic`, `aux`, or `key`)
+- `-e`, `--env`: Environment where Signal was running (`windows` or `gnome`)
+- `-kf`, `--key-file`: Path to file containing key as a hex string (for key provided modes)
+- `-k`, `--key`: Provide key directly as a hex string (for key provided modes)
+- `-gkf`, `--gnome-keyring-file`: Path to Gnome Keyring file (for forensic mode)
+- `-p`, `--password`: Master password for Gnome Keyring (for forensic mode)
+- `-pb`, `--password-bytes`: Provide password as a hex string (for forensic mode)
+- `-pbf`, `--password-bytes-file`: Path to file containing password as a hex string (for forensic mode)
 
 ---
 
@@ -110,4 +168,4 @@ Example report:
 
 ## 📜 License
 
-This project is open-source and licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is open-source and licensed under the GNU General Public License Version 3. See the [LICENSE](LICENSE) file for details.

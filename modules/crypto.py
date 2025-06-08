@@ -2,7 +2,7 @@
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives.hashes import Hash, SHA256, SHA512, SHA1
+from cryptography.hazmat.primitives.hashes import Hash, SHA256, SHA512, SHA1, MD5
 
 ####################### Cryptography #######################
 
@@ -13,8 +13,8 @@ def aes_256_gcm_decrypt(key, nonce, ciphertext, tag):
     return decryptor.update(ciphertext) + decryptor.finalize()
 
 
-# AES-256-CBC encryption
-def aes_256_cbc_decrypt(key, nonce, ciphertext):
+# AES-CBC encryption
+def aes_cbc_decrypt(key, nonce, ciphertext):
     decryptor = Cipher(algorithms.AES(key), modes.CBC(nonce), backend=default_backend()).decryptor()
     return decryptor.update(ciphertext) + decryptor.finalize()
 
@@ -25,6 +25,27 @@ def pbkdf2_derive_key(algorithm, password, salt, iterations, key_length):
         algorithm=algorithm, length=key_length, salt=salt, iterations=iterations, backend=default_backend()
     )
     return kdf.derive(password)
+
+
+# Derive EVP key
+def derive_evp_key(password: bytes, salt: bytes, key_len: int, iterations: int = 1):
+    backend = default_backend()
+    derived = b""
+    prev = b""
+
+    while len(derived) < key_len:
+        digest = Hash(SHA256(), backend=backend)
+        digest.update(prev + password + salt)
+        prev = digest.finalize()
+
+        for _ in range(1, iterations):
+            digest = Hash(SHA256(), backend=backend)
+            digest.update(prev)
+            prev = digest.finalize()
+
+        derived += prev
+
+    return derived[:key_len]
 
 
 # Hashing algorithm
@@ -49,6 +70,11 @@ def hash_sha512(data, rounds=1):
 # SHA-1 hash
 def hash_sha1(data, rounds=1):
     return hash_algorithm(data, SHA1(), rounds)
+
+
+# MD5 hash
+def hash_md5(data, rounds=1):
+    return hash_algorithm(data, MD5(), rounds)
 
 
 # MD4 hash

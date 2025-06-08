@@ -3,10 +3,8 @@ import pathlib
 import os
 import json
 import base64
-import uuid
 import random
 import string
-import mimetypes
 import sys
 import csv
 from datetime import datetime
@@ -16,33 +14,21 @@ from collections import defaultdict
 import sqlcipher3
 
 from modules import shared_utils as su
-from modules.shared_utils import bytes_to_hex, log, MalformedKeyError, mime_to_extension
-from modules.crypto import aes_256_gcm_decrypt, aes_256_cbc_decrypt, hash_sha256
+from modules.shared_utils import bytes_to_hex, log, MalformedKeyError, MalformedInputFileError, mime_to_extension
+from modules.crypto import aes_cbc_decrypt, hash_sha256
 from modules.htmlreport import generate_html_report
+from modules.gnome import gnome_derive_aux_key, gnome_get_aux_key_passphrase, gnome_get_sqlcipher_key_from_aux
+from modules.windows import win_fetch_encrypted_aux_key, unprotect_manually, win_get_sqlcipher_key_from_aux
 
 ####################### CONSTANTS #######################
-VERSION = "1.0"
-
-AUX_KEY_PREFIX = "DPAPI"
-
-DEC_KEY_PREFIX = "v10"
-
-DPAPI_BLOB_GUID = uuid.UUID("df9d8cd0-1501-11d1-8c7a-00c04fc297eb")
+VERSION = "2.1.1"
 
 EMPTY_IV = "AAAAAAAAAAAAAAAAAAAAAA=="  # 16 bytes of 0x00
 
 ATTACHMENT_FOLDER = pathlib.Path("attachments.noindex")
 AVATARS_FOLDER = pathlib.Path("avatars.noindex")
 DRAFTS_FOLDER = pathlib.Path("drafts.noindex")
-
-####################### EXCEPTIONS #######################
-
-
-class MalformedInputFileError(Exception):
-    """Exception raised for a malformed input file."""
-
-    pass
-
+DOWNLOADS_FOLDER = pathlib.Path("downloads.noindex")
 
 ####################### I/O ARGS #######################
 
@@ -52,10 +38,10 @@ def parse_args():
     parser = argparse.ArgumentParser(
         prog="SignalDecryptor",
         description="Decrypts the forensic artifacts from Signal Desktop on Windows",
-        usage="""%(prog)s [-m auto] -d <signal_dir> [-o <output_dir>] [OPTIONS]
-        %(prog)s -m aux -d <signal_dir> [-o <output_dir>] [-kf <file> | -k <HEX>] [OPTIONS]
-        %(prog)s -m key -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
-        %(prog)s -m manual -d <signal_dir> [-o <output_dir>] -wS <SID> -wP <password> [OPTIONS]
+        usage="""%(prog)s [-m live] [-e <environment>] -d <signal_dir> [-o <output_dir>] [OPTIONS]
+        %(prog)s -m aux [-e <environment>] -d <signal_dir> [-o <output_dir>] [-kf <file> | -k <HEX>] [OPTIONS]
+        %(prog)s -m key [-e <environment>] -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
+        %(prog)s -m forensic -e gnome -d <signal_dir> [-o <output_dir>] -p <password> -gkf <gnome_keyring_file> [OPTIONS]
         """,
     )
     # [-d <signal_dir> | (-c <file> -ls <file>)]
@@ -72,18 +58,34 @@ def parse_args():
     # Custom function to parse mode argument
     def parse_mode(value):
         aliases = {
-            "auto": "auto",
-            "manual": "manual",
+            "live": "live",
+            "forensic": "forensic",
             "aux": "aux",
             "key": "key",
-            "a": "auto",
-            "m": "manual",
-            "ak": "aux",
-            "dk": "key",
+            "l": "live",
+            "f": "forensic",
+            "a": "aux",
+            "k": "key",
         }
         normalized_value = value.lower()
         if normalized_value not in aliases:
             raise argparse.ArgumentTypeError(f"Invalid mode '{value}'. Valid choices are: {', '.join(aliases.keys())}")
+        return aliases[normalized_value]
+
+    # Custom function to parse env argument
+    def parse_env(value):
+        aliases = {
+            "windows": "windows",
+            "gnome": "gnome",
+            "win": "windows",
+            "w": "windows",
+            "g": "gnome",
+        }
+        normalized_value = value.lower()
+        if normalized_value not in aliases:
+            raise argparse.ArgumentTypeError(
+                f"Invalid environment '{value}'. Valid choices are: {', '.join(aliases.keys())}"
+            )
         return aliases[normalized_value]
 
     # Custom type function to convert HEX to bytes
@@ -99,15 +101,28 @@ def parse_args():
         "-m",
         "--mode",
         help=(
-            "Mode of execution (choices: 'auto' for Windows Automatic, 'aux' for Auxiliary Key Provided, "
-            "'key' for Decryption Key Provided), 'manual' for Windows Manual. "
-            "Short aliases: -mA (Auto), -mAK (Auxiliary Key), -mDK (Decryption Key), -mM (Manual)"
-            "Default: auto"
+            "Mode of execution (choices: 'live' for Live, 'aux' for Auxiliary Key Provided, "
+            "'key' for SQLCipher Key Provided), 'forensic' for Forensic. "
+            "Short aliases: -mL (Live), -mA (Auxiliary Key), -mK (SQLCipher Key), -mF (Forensic)"
+            "Default: live"
         ),
         type=parse_mode,
-        choices=["auto", "aux", "key", "manual"],
-        metavar="{auto|aux|key|manual}",
-        default="auto",
+        choices=["live", "aux", "key", "forensic"],
+        metavar="{live|aux|key|forensic}",
+        default="live",
+    )
+
+    # Define environment argument
+    parser.add_argument(
+        "-e",
+        "--env",
+        help="Environment from which the Signal data was extracted (currently only 'windows' and 'gnome' are supported)."
+        "Short aliases: -eW (Windows), -eG (Gnome)."
+        "Default: windows",
+        type=parse_env,
+        choices=["windows", "gnome"],
+        metavar="{windows|gnome}",
+        default="windows",
     )
 
     # IO arguments
@@ -145,8 +160,36 @@ def parse_args():
     )
     key_group.add_argument("-k", "--key", help="Key in HEX format", type=hex_to_bytes, metavar="<HEX>")
 
-    # DPAPI related arguments
-    # manual_group = parser.add_argument_group("Windows Manual Mode", "Arguments required for manual mode.")
+    # Forensic Mode related arguments
+    forensic_group = parser.add_argument_group("Forensic Mode", "Arguments required for forensic mode.")
+    forensic_group.add_argument(
+        "-p",
+        "--password",
+        help="Gnome Keyring's master password (by default, it is the same as the user account's password)",
+        type=str,
+        metavar="<password>",
+    )
+    forensic_group.add_argument(
+        "-pb",
+        "--password-bytes",
+        help="Gnome Keyring's master password in HEX format",
+        type=hex_to_bytes,
+        metavar="<bytes>",
+    )
+    forensic_group.add_argument(
+        "-pbf",
+        "--password-bytes-file",
+        help="Path to the file containing the Gnome Keyring's master password in HEX format",
+        type=pathlib.Path,
+        metavar="<file>",
+    )
+    forensic_group.add_argument(
+        "-gkf",
+        "--gnome-keyring-file",
+        help="Path to the user's Gnome Keyring file",
+        type=pathlib.Path,
+        metavar="<file>",
+    )
     # manual_group.add_argument("-wS", "--windows-sid", help="Target windows user's SID", metavar="<SID>")
     # manual_group.add_argument("-wP", "--windows-password", help="Target windows user's password", metavar="<password>")
 
@@ -204,6 +247,14 @@ def parse_args():
 # Validate arguments
 def validate_args(args: argparse.Namespace):
 
+    # Validate OS-specific modes
+    if args.mode == "live":
+        if not sys.platform.startswith("win") and not sys.platform.startswith("linux"):
+            raise OSError("Live mode is currently only available on Windows and Linux Gnome.")
+    elif args.mode == "forensic":
+        if args.env != "gnome":
+            raise OSError("Forensic mode is only supported for artifacts originating from a Linux Gnome environment.")
+
     # Validate Signal directory
     if not args.dir.is_dir():
         raise FileNotFoundError(f"Signal directory '{args.dir}' does not exist or is not a directory.")
@@ -215,9 +266,12 @@ def validate_args(args: argparse.Namespace):
         if not args.config.is_file():
             raise FileNotFoundError(f"Signal's configuration file '{args.config}' does not exist or is not a file.")
 
-        # Check for Signal's local state file
-        if not args.local_state.is_file():
-            raise FileNotFoundError(f"Signal's local state file '{args.local_state}' does not exist or is not a file.")
+        if args.env == "windows":
+            # Check for Signal's local state file
+            if not args.local_state.is_file():
+                raise FileNotFoundError(
+                    f"Signal's local state file '{args.local_state}' does not exist or is not a file."
+                )
 
     # Validate output directory
     if not args.output:
@@ -230,17 +284,22 @@ def validate_args(args: argparse.Namespace):
         except OSError as e:
             raise FileNotFoundError(f"Output directory '{args.output}' does not exist and could not be created.") from e
 
-    # Validate auto mode
-    if args.mode == "auto":
-        if not sys.platform.startswith("win"):
-            raise OSError("Automatic mode is only available on Windows.")
-
     # Validate manual mode arguments
-    if args.mode == "manual":
-        if not args.windows_sid:
-            raise ValueError("Windows User SID is required for manual mode.")
-        if not args.windows_password:
-            raise ValueError("Windows User Password is required for manual mode.")
+    if args.mode == "forensic":
+        # if not args.windows_sid:
+        #    raise ValueError("Windows User SID is required for manual mode.")
+        # if not args.windows_password:
+        #    raise ValueError("Windows User Password is required for manual mode.")
+        if args.password_bytes_file:
+            if not args.password_bytes_file.is_file():
+                raise FileNotFoundError(
+                    f"Password bytes file '{args.password_bytes_file}' does not exist or is not a file."
+                )
+        elif not args.password and not args.password_bytes:
+            raise ValueError("Gnome Keyring's master password is required for forensic mode.")
+
+        if not args.gnome_keyring_file:
+            raise ValueError("Gnome Keyring file is required for forensic mode.")
 
     # Validate key provided mode arguments
     if args.mode in ["aux", "key"]:
@@ -258,13 +317,34 @@ def validate_args(args: argparse.Namespace):
 ####################### KEY FETCHING #######################
 
 
-def fetch_key_from_args(args: argparse.Namespace):
-    # If a key file is provided, read the key from the file
-    if args.key_file:
-        log("Reading the key from the file...", 2)
-        with args.key_file.open("r") as f:
+def fetch_hex_or_file_content_from_args(args_file, args_key, content="key"):
+    """
+    Fetches content from either a file or a hex string provided in the arguments.
+    If a file is provided, it reads the content of the file and returns it as bytes.
+    If a hex string is provided, it converts it to bytes and returns it.
+    """
+    # If a file is provided, read contents from the file
+    if args_file:
+        log(f"Reading the {content} from the file...", 2)
+        with args_file.open("r") as f:
             return bytes.fromhex(f.read().strip())
-    return args.key
+    elif args_key:
+        return args_key
+    else:
+        raise ValueError(f"No {content} provided. Please provide either a {content} file or a hex string.")
+
+
+def fetch_key_from_args(args: argparse.Namespace):
+    return fetch_hex_or_file_content_from_args(args.key_file, args.key, content="key")
+
+
+def fetch_password_from_args(args: argparse.Namespace):
+    if args.password_bytes_file or args.password_bytes:
+        return fetch_hex_or_file_content_from_args(args.password_bytes_file, args.password_bytes, content="password")
+    else:
+        if not args.password:
+            raise ValueError("No password provided. Please provide either a password or a password bytes file.")
+        return args.password.encode("utf-8")
 
 
 def fetch_aux_key(args: argparse.Namespace):
@@ -272,41 +352,27 @@ def fetch_aux_key(args: argparse.Namespace):
     if args.mode == "aux":
         return fetch_key_from_args(args)
     else:
-        with args.local_state.open("r") as f:
-            try:
-                data = json.load(f)
-            except json.JSONDecodeError:
-                raise MalformedInputFileError("The Local State file was malformed: Invalid JSON structure.")
+        if args.env == "gnome":
+            if args.mode == "live":
+                from modules import gnome_live as gnome_live
 
-            # Validate the presence of "os_crypt" and "encrypted_key"
-            encrypted_key = data.get("os_crypt", {}).get("encrypted_key")
-            if not encrypted_key:
-                raise MalformedInputFileError(
-                    "The Local State file was malformed: Missing the encrypted auxiliary key."
-                )
-
-            # Decode the base64 encoded key and remove the prefix
-            try:
-                encrypted_key = base64.b64decode(encrypted_key)[len(AUX_KEY_PREFIX) :]
-            except ValueError:
-                raise MalformedKeyError("The encrypted key is not a valid base64 string.")
-            except IndexError:
-                raise MalformedKeyError("The encrypted key is malformed.")
-
-            # Check if this is a DPAPI blob
-            if encrypted_key[4:20] != DPAPI_BLOB_GUID.bytes_le:
-                raise MalformedKeyError("The encrypted auxiliary key is not in the expected DPAPI BLOB format.")
-
-            if args.mode == "auto":
+                gnome_passphrase = gnome_live.gnome_get_aux_key_passphrase_live()
+            elif args.mode == "forensic":
+                gnome_password = fetch_password_from_args(args)
+                gnome_passphrase = gnome_get_aux_key_passphrase(args.gnome_keyring_file, gnome_password)
+            else:
+                raise ValueError("An invalid mode for the Gnome environment was chosen!")
+            return gnome_derive_aux_key(gnome_passphrase)
+        else:
+            encrypted_aux_key = win_fetch_encrypted_aux_key(args.local_state)
+            if args.mode == "live":
                 try:
-                    from modules import windows as win
+                    from modules import windows_live as win_live
                 except ImportError as e:
                     raise ImportError("Windows-specific module could not be imported:", e)
-                return win.unprotect_with_dpapi(encrypted_key)
-            elif args.mode == "manual":
-                from modules import manual as manual_mode  # REVIEW: Should this be imported here or at the top?
-
-                return manual_mode.unprotect_manually(encrypted_key, args.windows_sid, args.windows_password)
+                return win_live.unprotect_with_dpapi(encrypted_aux_key)
+            elif args.mode == "forensic":
+                return unprotect_manually(encrypted_aux_key, args.windows_sid, args.windows_password)
     return None
 
 
@@ -328,23 +394,14 @@ def fetch_decryption_key(args: argparse.Namespace, aux_key: bytes):
         except ValueError:
             raise MalformedKeyError("The encrypted decryption key is not a valid HEX string.")
 
-        # Check if the key has the expected prefix
-        if key[: len(DEC_KEY_PREFIX)] != DEC_KEY_PREFIX.encode("utf-8"):
-            raise MalformedKeyError("The encrypted decryption key does not start with the expected prefix.")
-        key = key[len(DEC_KEY_PREFIX) :]
-
         log("Processing the encrypted decryption key...", 2)
 
-        nonce = key[:12]  # Nonce is in the first 12 bytes
-        gcm_tag = key[-16:]  # GCM tag is in the last 16 bytes
-        key = key[12:-16]
+        if args.env == "gnome":
+            decrypted_key = gnome_get_sqlcipher_key_from_aux(encrypted_key=key, aux_key=aux_key)
+        else:
+            decrypted_key = win_get_sqlcipher_key_from_aux(encrypted_key=key, aux_key=aux_key)
 
-        log(f"> Nonce: {bytes_to_hex(nonce)}", 3)
-        log(f"> GCM Tag: {bytes_to_hex(gcm_tag)}", 3)
-        log(f"> Key: {bytes_to_hex(key)}", 3)
-
-        log("Decrypting the decryption key...", 2)
-        decrypted_key = aes_256_gcm_decrypt(aux_key, nonce, key, gcm_tag)
+        log("> repr(SQLCipher Key): " + repr(decrypted_key.decode("utf-8")), 3)
 
         return bytes.fromhex(decrypted_key.decode("utf-8"))
 
@@ -438,7 +495,23 @@ def handle_avatar(convJson, convType):
 def process_attachment(args: argparse.Namespace, attachments_dir, attachment, statuses):
     if attachment.get("contentType", "") == "text/x-signal-story":
         return
-    subpath = attachment["path"]
+
+    if "path" in attachment:
+        subpath = attachment["path"]
+    elif "downloadPath" in attachment:
+        subpath = attachment["downloadPath"]
+        statuses["error"] += 1
+        log(
+            f"[!] Skipping attachment with downloadPath: {DOWNLOADS_FOLDER}/{subpath}. Signal Desktop currently cannot manually decrypt this attachment.",
+            2,
+        )
+        return
+    else:
+        statuses["error"] += 1
+        fnForError = attachment.get("fileName", "unknown")
+        log(f"[!] Could not find a path for an attachment with file name {fnForError}", 3)
+        return
+
     try:
         # Fetch attachment crypto data
         key = base64.b64decode(attachment["localKey"])[:32]
@@ -451,7 +524,11 @@ def process_attachment(args: argparse.Namespace, attachments_dir, attachment, st
         size = int(attachment["size"])
 
         # Encrypted attachment path
-        folder = ATTACHMENT_FOLDER if "path_pref" not in attachment else attachment["path_pref"]
+        folder = (
+            (ATTACHMENT_FOLDER if "path" in attachment else DOWNLOADS_FOLDER)
+            if "path_pref" not in attachment
+            else attachment["path_pref"]
+        )
         enc_attachment_path = args.dir / folder / subpath
 
         # Check if the encrypted attachment is present on the expected path
@@ -465,7 +542,7 @@ def process_attachment(args: argparse.Namespace, attachments_dir, attachment, st
             enc_attachment_data = f.read()
 
         # Decrypt the attachment
-        attachment_data = aes_256_cbc_decrypt(key, nonce, enc_attachment_data)
+        attachment_data = aes_cbc_decrypt(key, nonce, enc_attachment_data)
         attachment_data = attachment_data[16 : 16 + size]  # Dismiss the first 16 bytes and the padding
         if bytes.fromhex(attachment["plaintextHash"]) != hash_sha256(attachment_data):
             log(f"[!] Attachment {subpath} failed integrity check", 2)
@@ -561,9 +638,11 @@ def export_attachments(cursor, args: argparse.Namespace):
 
     log(f"[i] Exported {statuses['exported']} attachments")
     if statuses["integrity_error"] > 0:
-        log(f"[!] {statuses['integrity_error']} attachments failed integrity check")
+        log(
+            f"[!] {statuses['integrity_error']} attachments failed integrity check (enable verbose mode 3 for more details)"
+        )
     if statuses["error"] > 0:
-        log(f"[!] Failed to export {statuses['error']} attachments")
+        log(f"[!] Failed to export {statuses['error']} attachments (enable verbose mode 3 for more details)")
 
 
 ####################### CSV/HTML REPORTS #######################
@@ -939,7 +1018,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
     ]
     MSGS_VERSION_HISTS_HEADERS = ["Message ID", "Version Received At", "Body"]
     MSGS_REACTIONS_HEADERS = ["Message ID", "Reactor's Conversation ID", "Reactor's Name", "Reaction", "Timestamp"]
-    MSGS_ATTACHMENTS_HEADERS = ["Message ID", "Type", "Path", "Content Type"]
+    MSGS_ATTACHMENTS_HEADERS = ["Message ID", "Type", "Path", "Original File Name", "Content Type"]
 
     GROUPS_CHANGES_HEADERS = [
         "Message ID",
@@ -1086,6 +1165,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                                         msgId,
                                         "attachment",
                                         attachment.get("path", None),
+                                        attachment.get("fileName", None),
                                         attContType,
                                     ]
                                 )
@@ -1098,6 +1178,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
                                     msgId,
                                     "preview",
                                     previewImg.get("path", None),
+                                    None,
                                     previewImg.get("contentType", None),
                                 ]
                             )
@@ -1317,6 +1398,7 @@ def print_config(args: argparse.Namespace):
     """Prints the script's current configuration."""
     log("----------------------==<[ CONFIG ]>==----------------------")
     log(f"Mode: {args.mode}")
+    log(f"Environment: {args.env}")
     log(f"Signal Directory: {args.dir}")
     if args.output:
         log(f"Output Directory: {args.output}")
@@ -1351,9 +1433,10 @@ def main():
     else:
         log("[i] Fetching auxiliary key...", 1)
         aux_key = fetch_aux_key(args)
-        if not aux_key or len(aux_key) != 32:
-            raise MalformedKeyError("The auxiliary key is not 32 bytes long.")
         log(f"> Auxiliary Key: {bytes_to_hex(aux_key)}", 2)
+        correct_aux_key_length = 32 if args.env == "windows" else 16
+        if not aux_key or len(aux_key) != correct_aux_key_length:
+            raise MalformedKeyError(f"The auxiliary key is not {correct_aux_key_length} bytes long.")
         log("[i] Auxiliary key loaded", 1)
 
         log("[i] Decrypting the decryption key...", 1)
