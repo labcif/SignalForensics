@@ -19,12 +19,12 @@ from modules.crypto import aes_cbc_decrypt, hash_sha256
 from modules.htmlreport import generate_html_report
 from modules.gnome import (
     gnome_get_aux_key_passphrase,
-    get_linux_hardcoded_key,
 )
 from modules.linux import (
     linux_derive_aux_key,
     linux_get_sqlcipher_key_from_aux,
     linux_should_use_hardcoded_key,
+    get_linux_hardcoded_key,
 )
 from modules.windows import win_fetch_encrypted_aux_key, unprotect_manually, win_get_sqlcipher_key_from_aux
 
