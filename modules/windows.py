@@ -45,7 +45,7 @@ def win_fetch_encrypted_aux_key(local_state) -> bytes:
 def win_get_sqlcipher_key_from_aux(encrypted_key: bytes, aux_key: bytes) -> bytes:
     # Check if the key has the expected prefix
     if encrypted_key[: len(DEC_KEY_PREFIX_WIN)] != DEC_KEY_PREFIX_WIN.encode("utf-8"):
-        raise MalformedKeyError("The encrypted decryption key does not start with the expected prefix.")
+        raise MalformedKeyError("The encrypted SQLCipher key does not start with the expected prefix.")
     key = encrypted_key[len(DEC_KEY_PREFIX_WIN) :]
 
     nonce = key[:12]  # Nonce is in the first 12 bytes
@@ -56,7 +56,7 @@ def win_get_sqlcipher_key_from_aux(encrypted_key: bytes, aux_key: bytes) -> byte
     log(f"> GCM Tag: {bytes_to_hex(gcm_tag)}", 3)
     log(f"> Key: {bytes_to_hex(key)}", 3)
 
-    log("Decrypting the decryption key...", 2)
+    log("Decrypting the SQLCipher key...", 2)
     return aes_256_gcm_decrypt(aux_key, nonce, key, gcm_tag)
 
 

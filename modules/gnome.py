@@ -3,8 +3,6 @@ from modules.shared_utils import bytes_to_hex, log
 import pathlib
 import struct
 from modules.linux import (
-    linux_should_use_hardcoded_key,
-    get_linux_hardcoded_key,
     linux_get_sqlcipher_key_from_aux,
     linux_derive_aux_key,
 )
@@ -184,15 +182,12 @@ def gnome_get_aux_key_passphrase(keyring_path: str, password: bytes) -> bytes:
 
 def gnome_test_get_sqlcipher_key(keyring_path: str, password: bytes, encrypted_key: bytes):
 
-    if linux_should_use_hardcoded_key(encrypted_key):
-        password = get_linux_hardcoded_key()
-
     passphrase = gnome_get_aux_key_passphrase(keyring_path, password)
     aux_key = linux_derive_aux_key(passphrase)
 
-    # Decrypt the decryption key using the auxiliary key
+    # Decrypt the SQLCipher key using the auxiliary key
     decryption_key = linux_get_sqlcipher_key_from_aux(encrypted_key, aux_key).decode("utf-8")  # TODO: Error handling
 
-    # print(f"Decryption Key: {decryption_key}")
+    # print(f"SQLCipher Key: {decryption_key}")
 
     return decryption_key

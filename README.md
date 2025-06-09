@@ -124,7 +124,7 @@ SignalForensics -m forensic -e <environment> -d <signal_dir> [-o <output_dir>] -
   ```bash
   SignalForensics -m aux -d signal_data/ -kf aux_key.txt -o output_folder
   ```
-- Decryption Key Provided Mode:
+- SQLCipher Key Provided Mode:
   ```bash
   SignalForensics -m key -d signal_data/ -k 9a325c73... -o output_folder
   ```

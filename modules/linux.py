@@ -35,5 +35,5 @@ def linux_derive_aux_key(passphrase: bytes) -> bytes:
 def linux_get_sqlcipher_key_from_aux(encrypted_key: bytes, aux_key: bytes) -> bytes:
     log(f"> Encrypted SQLCipher Key: {bytes_to_hex(encrypted_key)}", 3)
 
-    log("Decrypting the decryption key...", 2)
+    log("Decrypting the SQLCipher key...", 2)
     return aes_cbc_decrypt(aux_key, b" " * 16, encrypted_key)[:64]
