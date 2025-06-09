@@ -7,6 +7,8 @@ import struct
 GNOME_KEYRING_PREFIX = b"GnomeKeyring\n\r\0\n"
 SIGNAL_BYTE_SEQ = bytes.fromhex("0000000B6170706C69636174696F6E00000000000000065369676E616C")
 DEC_KEY_PREFIX_GNOME = "v11"
+DEC_KEY_PREFIX_HARDCODED = "v10"
+LINUX_HARDCODED_KEY = b"peanuts"
 
 
 # Skip the string length in a keyring file
@@ -177,12 +179,30 @@ def gnome_get_aux_key_passphrase(keyring_path: str, password: bytes) -> bytes:
     return passphrase
 
 
-def gnome_derive_aux_key(passphrase: bytes) -> bytes:
+def linux_derive_aux_key(passphrase: bytes) -> bytes:
     log("Deriving the auxiliary key...", 2)
     aux_key = pbkdf2_derive_key(algorithm=SHA1(), password=passphrase, salt=b"saltysalt", iterations=1, key_length=16)
     # print(f"Auxiliary Key: {bytes_to_hex(aux_key)}")
 
     return aux_key
+
+
+def get_linux_hardcoded_key() -> bytes:
+    return LINUX_HARDCODED_KEY
+
+
+# V10 = yes, V11 = no
+def linux_should_use_hardcoded_key(sqlcipher_key_cipherdata: bytes) -> bool:
+    """
+    Determines whether to use the hardcoded key based on the version.
+    """
+    if sqlcipher_key_cipherdata[: len(DEC_KEY_PREFIX_HARDCODED)] == DEC_KEY_PREFIX_HARDCODED.encode("utf-8"):
+        log("Using hardcoded key for SQLCipher key decryption...", 3)
+        return True
+    elif sqlcipher_key_cipherdata[: len(DEC_KEY_PREFIX_GNOME)] == DEC_KEY_PREFIX_GNOME.encode("utf-8"):
+        log("Using decryption key stored in GNOME Keyring...", 3)
+        return False
+    return
 
 
 def gnome_get_sqlcipher_key_from_aux(encrypted_key: bytes, aux_key: bytes) -> bytes:
@@ -199,8 +219,11 @@ def gnome_get_sqlcipher_key_from_aux(encrypted_key: bytes, aux_key: bytes) -> by
 
 def gnome_test_get_sqlcipher_key(keyring_path: str, password: bytes, encrypted_key: bytes):
 
+    if linux_should_use_hardcoded_key(encrypted_key):
+        password = b"peanuts"
+
     passphrase = gnome_get_aux_key_passphrase(keyring_path, password)
-    aux_key = gnome_derive_aux_key(passphrase)
+    aux_key = linux_derive_aux_key(passphrase)
 
     # Decrypt the decryption key using the auxiliary key
     decryption_key = gnome_get_sqlcipher_key_from_aux(encrypted_key, aux_key).decode("utf-8")  # TODO: Error handling

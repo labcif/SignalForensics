@@ -17,7 +17,13 @@ from modules import shared_utils as su
 from modules.shared_utils import bytes_to_hex, log, MalformedKeyError, MalformedInputFileError, mime_to_extension
 from modules.crypto import aes_cbc_decrypt, hash_sha256
 from modules.htmlreport import generate_html_report
-from modules.gnome import gnome_derive_aux_key, gnome_get_aux_key_passphrase, gnome_get_sqlcipher_key_from_aux
+from modules.gnome import (
+    linux_derive_aux_key,
+    gnome_get_aux_key_passphrase,
+    gnome_get_sqlcipher_key_from_aux,
+    linux_should_use_hardcoded_key,
+    get_linux_hardcoded_key,
+)
 from modules.windows import win_fetch_encrypted_aux_key, unprotect_manually, win_get_sqlcipher_key_from_aux
 
 ####################### CONSTANTS #######################
@@ -311,7 +317,7 @@ def validate_args(args: argparse.Namespace):
 
     # If mode is Key Provided and skip decryption is enabled, raise an error
     if args.mode == "key" and args.skip_decryption:
-        raise ValueError("Decryption cannot be skipped when providing the decryption key.")
+        raise ValueError("Decryption cannot be skipped when providing the SQLCipher key.")
 
 
 ####################### KEY FETCHING #######################
@@ -347,7 +353,7 @@ def fetch_password_from_args(args: argparse.Namespace):
         return args.password.encode("utf-8")
 
 
-def fetch_aux_key(args: argparse.Namespace):
+def fetch_aux_key(args: argparse.Namespace, encrypted_sqlcipher_key: bytes):
     # If the user provided the auxiliary key, return it
     if args.mode == "aux":
         return fetch_key_from_args(args)
@@ -358,11 +364,14 @@ def fetch_aux_key(args: argparse.Namespace):
 
                 gnome_passphrase = gnome_live.gnome_get_aux_key_passphrase_live()
             elif args.mode == "forensic":
-                gnome_password = fetch_password_from_args(args)
-                gnome_passphrase = gnome_get_aux_key_passphrase(args.gnome_keyring_file, gnome_password)
+                if linux_should_use_hardcoded_key(encrypted_sqlcipher_key):
+                    gnome_passphrase = get_linux_hardcoded_key()
+                else:
+                    gnome_password = fetch_password_from_args(args)
+                    gnome_passphrase = gnome_get_aux_key_passphrase(args.gnome_keyring_file, gnome_password)
             else:
                 raise ValueError("An invalid mode for the Gnome environment was chosen!")
-            return gnome_derive_aux_key(gnome_passphrase)
+            return linux_derive_aux_key(gnome_passphrase)
         else:
             encrypted_aux_key = win_fetch_encrypted_aux_key(args.local_state)
             if args.mode == "live":
@@ -376,7 +385,8 @@ def fetch_aux_key(args: argparse.Namespace):
     return None
 
 
-def fetch_decryption_key(args: argparse.Namespace, aux_key: bytes):
+def fetch_encrypted_sqlcipher_key(args: argparse.Namespace):
+    log("Fetching the encrypted SQLCipher key from the configuration file...", 3)
     with args.config.open("r") as f:
         try:
             data = json.load(f)
@@ -386,24 +396,29 @@ def fetch_decryption_key(args: argparse.Namespace, aux_key: bytes):
         # Validate the presence of "encryptedKey"
         encrypted_key = data.get("encryptedKey")
         if not encrypted_key:
-            raise MalformedInputFileError("The Configuration file was malformed: Missing the encrypted decryption key.")
+            raise MalformedInputFileError("The Configuration file was malformed: Missing the encrypted SQLCipher key.")
 
         # Import the hex string into bytes
         try:
             key = bytes.fromhex(encrypted_key)
+            return key
         except ValueError:
-            raise MalformedKeyError("The encrypted decryption key is not a valid HEX string.")
+            raise MalformedKeyError("The encrypted SQLCipher key is not a valid HEX string.")
+    return None
 
-        log("Processing the encrypted decryption key...", 2)
 
-        if args.env == "gnome":
-            decrypted_key = gnome_get_sqlcipher_key_from_aux(encrypted_key=key, aux_key=aux_key)
-        else:
-            decrypted_key = win_get_sqlcipher_key_from_aux(encrypted_key=key, aux_key=aux_key)
+def decrypt_sqlcipher_key(args: argparse.Namespace, aux_key: bytes, encrypted_key: bytes):
 
-        log("> repr(SQLCipher Key): " + repr(decrypted_key.decode("utf-8")), 3)
+    log("Processing the encrypted SQLCipher key...", 2)
 
-        return bytes.fromhex(decrypted_key.decode("utf-8"))
+    if args.env == "gnome":
+        decrypted_key = gnome_get_sqlcipher_key_from_aux(encrypted_key=encrypted_key, aux_key=aux_key)
+    else:
+        decrypted_key = win_get_sqlcipher_key_from_aux(encrypted_key=encrypted_key, aux_key=aux_key)
+
+    log("> repr(SQLCipher Key): " + repr(decrypted_key.decode("utf-8")), 3)
+
+    return bytes.fromhex(decrypted_key.decode("utf-8"))
 
 
 ####################### SQLCIPHER & DATABASE #######################
@@ -425,7 +440,7 @@ def open_sqlcipher_db(args: argparse.Namespace, key: bytes):
     log(f"Executing: {statement}", 3)
     cursor.execute(statement)
 
-    # Test if the decryption key is correct
+    # Test if the SQLCipher key is correct
     try:
         log("Trying SQLCipher key...", 2)
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
@@ -1421,26 +1436,29 @@ def main():
     su.quiet = args.quiet
     su.verbose = args.verbose
 
-    # Initialize decryption key
+    # Initialize SQLCipher key
     decryption_key = None
 
-    # Fetch the decryption key
+    # Fetch the SQLCipher key
     if args.mode == "key":
-        log("[i] Fetching decryption key...", 1)
+        log("[i] Fetching SQLCipher key...", 1)
         decryption_key = fetch_key_from_args(args)
-        log(f"> Decryption Key: {bytes_to_hex(decryption_key)}", 2)
-        log("[i] Decryption key loaded", 1)
+        log(f"> SQLCipher Key: {bytes_to_hex(decryption_key)}", 2)
+        log("[i] SQLCipher key loaded", 1)
     else:
+        log("[i] Fetching encrypted SQLCipher key...", 1)
+        encrypted_sqlcipher_key = fetch_encrypted_sqlcipher_key(args)
+
         log("[i] Fetching auxiliary key...", 1)
-        aux_key = fetch_aux_key(args)
+        aux_key = fetch_aux_key(args, encrypted_sqlcipher_key)
         log(f"> Auxiliary Key: {bytes_to_hex(aux_key)}", 2)
         correct_aux_key_length = 32 if args.env == "windows" else 16
         if not aux_key or len(aux_key) != correct_aux_key_length:
             raise MalformedKeyError(f"The auxiliary key is not {correct_aux_key_length} bytes long.")
         log("[i] Auxiliary key loaded", 1)
 
-        log("[i] Decrypting the decryption key...", 1)
-        decryption_key = fetch_decryption_key(args, aux_key)
+        log("[i] Decrypting the SQLCipher key...", 1)
+        decryption_key = decrypt_sqlcipher_key(args, aux_key, encrypted_sqlcipher_key)
         log(f"[i] SQLCipher Key: {bytes_to_hex(decryption_key)}")
 
     # Skip all decryption if requested
