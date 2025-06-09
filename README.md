@@ -63,7 +63,7 @@ SignalDecryptor supports four execution modes:
   - The GNOME Keyring file (usually `login.keyring`)
   - The user's master password (or its raw hex form)  
     The script uses these to derive the auxiliary key and subsequently decrypt the SQLCipher key.
-    > ⚠️ **Note:** This mode is currently not available for **Windows**.
+    > ⚠️ This mode is currently not available for **Windows**.
 
 - **Auxiliary Key Provided** (`-m aux`)  
   In this mode, the user manually supplies the **auxiliary key** (either directly via `--key` or via a file with `--key-file`).  
@@ -73,7 +73,14 @@ SignalDecryptor supports four execution modes:
 - **SQLCipher Key Provided** (`-m key`)  
   In this most direct mode, the user provides the **SQLCipher key** (the key that directly decrypts Signal’s database).  
   This bypasses the need to decrypt anything from the `config.json` or derive keys — the script uses the supplied key immediately to decrypt the database and extract artifacts.
+
   > ⚠️ This mode assumes you already possess the exact SQLCipher key used by Signal.
+
+- **Passphrase Provided** (`-m passphrase`)  
+  Accepts the passphrase stored in the GNOME Keyring.  
+  SignalDecryptor will use this string to derive the auxiliary key and decrypt artifacts.  
+  Useful when you have already extracted the passphrase from the keyring structure itself.
+  > ⚠️ This mode is currently only supported for Linux GNOME environments.
 
 ### Required Environment Flag
 
@@ -91,6 +98,7 @@ Each mode requires you to specify the **environment** from which the Signal data
 | Forensic               | ❌      | ✅    | ✅    |
 | Auxiliary Key Provided | ✅      | ✅    | ✅    |
 | SQLCipher Key Provided | ✅      | ✅    | ✅    |
+| Passphrase Provided    | ❌      | ✅    | ❌    |
 
 > ⚠️ **Note:** In Linux environments without a OS-level keystore library, Live mode behaves identically to Forensic mode, as no secure key retrieval via the operating system is required.
 
@@ -102,9 +110,10 @@ Each mode requires you to specify the **environment** from which the Signal data
 
 ```bash
 SignalForensics [-m live] [-e <environment>] -d <signal_dir> [-o <output_dir>] [OPTIONS]
+SignalForensics -m forensic -e <environment> -d <signal_dir> [-o <output_dir>] [-p <password> | -pb <HEX> | -pbf <file>] -gkf <gnome_keyring_file> [OPTIONS]
 SignalForensics -m aux [-e <environment>] -d <signal_dir> [-o <output_dir>] [-kf <file> | -k <HEX>] [OPTIONS]
 SignalForensics -m key [-e <environment>] -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
-SignalForensics -m forensic -e <environment> -d <signal_dir> [-o <output_dir>] -p <password> -gkf <gnome_keyring_file> [OPTIONS]
+SignalForensics -m passphrase -e <environment> -d <signal_dir> [-p <passphrase> | -pb <HEX> | -pbf <file>] [-o <output_dir>] [OPTIONS]
 ```
 
 **Examples:**
@@ -127,6 +136,10 @@ SignalForensics -m forensic -e <environment> -d <signal_dir> [-o <output_dir>] -
 - SQLCipher Key Provided Mode:
   ```bash
   SignalForensics -m key -d signal_data/ -k 9a325c73... -o output_folder
+  ```
+- Passphrase Provided Mode:
+  ```bash
+  SignalForensics -m passphrase -d signal_data/ -p "vEq+XKoPekTsiU+nciF4" -o output_folder
   ```
 
 ### ⚙️ Options
@@ -154,6 +167,8 @@ SignalForensics -m forensic -e <environment> -d <signal_dir> [-o <output_dir>] -
 - `-p`, `--password`: Master password for Gnome Keyring (for forensic mode)
 - `-pb`, `--password-bytes`: Provide password as a hex string (for forensic mode)
 - `-pbf`, `--password-bytes-file`: Path to file containing password as a hex string (for forensic mode)
+
+> ⚠️ The password options (`-p`, `-pb`, `-pbf`) are reused for passphrase provided mode, where they represent the passphrase used to derive the auxiliary key.
 
 ---
 

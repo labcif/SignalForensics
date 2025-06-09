@@ -47,9 +47,10 @@ def parse_args():
         prog="SignalDecryptor",
         description="Decrypts the forensic artifacts from Signal Desktop on Windows",
         usage="""%(prog)s [-m live] [-e <environment>] -d <signal_dir> [-o <output_dir>] [OPTIONS]
+        %(prog)s -m forensic -e <environment> -d <signal_dir> [-o <output_dir>] [-p <password> | -pb <HEX> | -pbf <file>] -gkf <gnome_keyring_file> [OPTIONS]
         %(prog)s -m aux [-e <environment>] -d <signal_dir> [-o <output_dir>] [-kf <file> | -k <HEX>] [OPTIONS]
         %(prog)s -m key [-e <environment>] -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
-        %(prog)s -m forensic -e <environment> -d <signal_dir> [-o <output_dir>] -p <password> -gkf <gnome_keyring_file> [OPTIONS]
+        %(prog)s -m passphrase -e <environment> -d <signal_dir> [-p <passphrase> | -pb <HEX> | -pbf <file>] [-o <output_dir>] [OPTIONS]
         """,
     )
     # [-d <signal_dir> | (-c <file> -ls <file>)]
@@ -70,10 +71,12 @@ def parse_args():
             "forensic": "forensic",
             "aux": "aux",
             "key": "key",
+            "passphrase": "passphrase",
             "l": "live",
             "f": "forensic",
             "a": "aux",
             "k": "key",
+            "p": "passphrase",
         }
         normalized_value = value.lower()
         if normalized_value not in aliases:
@@ -112,13 +115,13 @@ def parse_args():
         "--mode",
         help=(
             "Mode of execution (choices: 'live' for Live, 'aux' for Auxiliary Key Provided, "
-            "'key' for SQLCipher Key Provided), 'forensic' for Forensic. "
-            "Short aliases: -mL (Live), -mA (Auxiliary Key), -mK (SQLCipher Key), -mF (Forensic)"
+            "'key' for SQLCipher Key Provided, 'forensic' for Forensic,  'passphrase' for Passphrase Provided)."
+            "Short aliases: -mL (Live), -mA (Auxiliary Key), -mK (SQLCipher Key), -mF (Forensic), -mP (Passphrase)"
             "Default: live"
         ),
         type=parse_mode,
-        choices=["live", "aux", "key", "forensic"],
-        metavar="{live|aux|key|forensic}",
+        choices=["live", "aux", "key", "forensic", "passphrase"],
+        metavar="{live|aux|key|forensic|passphrase}",
         default="live",
     )
 
@@ -266,6 +269,11 @@ def validate_args(args: argparse.Namespace):
             raise OSError(
                 "Forensic mode is currently only supported for artifacts originating from a Linux environment."
             )
+    elif args.mode == "passphrase":
+        if not args.env == "gnome":
+            raise OSError(
+                "Passphrase Provided mode is currently only supported for artifacts originating from a Linux environment using a OS-level keystore library (i.e., Libsecret, Kwallet)."
+            )
 
     # Validate Signal directory
     if not args.dir.is_dir():
@@ -375,6 +383,8 @@ def fetch_aux_key(args: argparse.Namespace, encrypted_sqlcipher_key: bytes):
                 else:
                     gnome_password = fetch_password_from_args(args)
                     gnome_passphrase = gnome_get_aux_key_passphrase(args.gnome_keyring_file, gnome_password)
+            elif args.mode == "passphrase":
+                gnome_passphrase = fetch_password_from_args(args)
             else:
                 raise ValueError("An invalid mode for the Gnome environment was chosen!")
             return linux_derive_aux_key(gnome_passphrase)
@@ -383,7 +393,7 @@ def fetch_aux_key(args: argparse.Namespace, encrypted_sqlcipher_key: bytes):
                 return linux_derive_aux_key(get_linux_hardcoded_key())
             else:
                 raise ValueError(
-                    "A OS-level library (e.g Libsecret, Kwallet) was used in the encryption process of this SQLCipher key, you must specify which ('gnome' or 'kwallet') using the --env argument."
+                    "A OS-level keystore library (i.e., Libsecret, Kwallet) was used in the encryption process of this SQLCipher key, you must specify which ('gnome' or 'kwallet') using the --env argument."
                 )
         else:
             encrypted_aux_key = win_fetch_encrypted_aux_key(args.local_state)
