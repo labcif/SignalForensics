@@ -1461,6 +1461,7 @@ def main():
     else:
         log("[i] Fetching encrypted SQLCipher key...", 1)
         encrypted_sqlcipher_key = fetch_encrypted_sqlcipher_key(args)
+        log(f"> Encrypted SQLCipher Key: {bytes_to_hex(encrypted_sqlcipher_key)}", 3)
 
         log("[i] Fetching auxiliary key...", 1)
         aux_key = fetch_aux_key(args, encrypted_sqlcipher_key)
