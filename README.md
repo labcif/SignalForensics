@@ -81,15 +81,18 @@ Each mode requires you to specify the **environment** from which the Signal data
 
 - `windows`: Standard Signal Desktop installation on Windows
 - `gnome`: Signal Desktop installation on Linux using GNOME Keyring
+- `linux`: Signal Desktop installation on Linux without a OS-level keystore library (e.g Libsecret)
 
 ### Compatibility Matrix
 
-| Execution Mode         | Windows | GNOME |
-| ---------------------- | ------- | ----- |
-| Live                   | ✅      | ✅    |
-| Forensic               | ❌      | ✅    |
-| Auxiliary Key Provided | ✅      | ✅    |
-| SQLCipher Key Provided | ✅      | ✅    |
+| Execution Mode         | Windows | GNOME | Linux |
+| ---------------------- | ------- | ----- | ----- |
+| Live                   | ✅      | ✅    | ➖    |
+| Forensic               | ❌      | ✅    | ✅    |
+| Auxiliary Key Provided | ✅      | ✅    | ✅    |
+| SQLCipher Key Provided | ✅      | ✅    | ✅    |
+
+> ⚠️ **Note:** In Linux environments without a OS-level keystore library, Live mode behaves identically to Forensic mode, as no secure key retrieval via the operating system is required.
 
 ---
 
@@ -101,7 +104,7 @@ Each mode requires you to specify the **environment** from which the Signal data
 SignalForensics [-m live] [-e <environment>] -d <signal_dir> [-o <output_dir>] [OPTIONS]
 SignalForensics -m aux [-e <environment>] -d <signal_dir> [-o <output_dir>] [-kf <file> | -k <HEX>] [OPTIONS]
 SignalForensics -m key [-e <environment>] -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
-SignalForensics -m forensic -e gnome -d <signal_dir> [-o <output_dir>] -p <password> -gkf <gnome_keyring_file> [OPTIONS]
+SignalForensics -m forensic -e <environment> -d <signal_dir> [-o <output_dir>] -p <password> -gkf <gnome_keyring_file> [OPTIONS]
 ```
 
 **Examples:**

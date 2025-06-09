@@ -18,11 +18,13 @@ from modules.shared_utils import bytes_to_hex, log, MalformedKeyError, Malformed
 from modules.crypto import aes_cbc_decrypt, hash_sha256
 from modules.htmlreport import generate_html_report
 from modules.gnome import (
-    linux_derive_aux_key,
     gnome_get_aux_key_passphrase,
-    gnome_get_sqlcipher_key_from_aux,
-    linux_should_use_hardcoded_key,
     get_linux_hardcoded_key,
+)
+from modules.linux import (
+    linux_derive_aux_key,
+    linux_get_sqlcipher_key_from_aux,
+    linux_should_use_hardcoded_key,
 )
 from modules.windows import win_fetch_encrypted_aux_key, unprotect_manually, win_get_sqlcipher_key_from_aux
 
@@ -47,7 +49,7 @@ def parse_args():
         usage="""%(prog)s [-m live] [-e <environment>] -d <signal_dir> [-o <output_dir>] [OPTIONS]
         %(prog)s -m aux [-e <environment>] -d <signal_dir> [-o <output_dir>] [-kf <file> | -k <HEX>] [OPTIONS]
         %(prog)s -m key [-e <environment>] -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
-        %(prog)s -m forensic -e gnome -d <signal_dir> [-o <output_dir>] -p <password> -gkf <gnome_keyring_file> [OPTIONS]
+        %(prog)s -m forensic -e <environment> -d <signal_dir> [-o <output_dir>] -p <password> -gkf <gnome_keyring_file> [OPTIONS]
         """,
     )
     # [-d <signal_dir> | (-c <file> -ls <file>)]
@@ -86,6 +88,8 @@ def parse_args():
             "win": "windows",
             "w": "windows",
             "g": "gnome",
+            "l": "linux",
+            "linux": "linux",
         }
         normalized_value = value.lower()
         if normalized_value not in aliases:
@@ -123,11 +127,11 @@ def parse_args():
         "-e",
         "--env",
         help="Environment from which the Signal data was extracted (currently only 'windows' and 'gnome' are supported)."
-        "Short aliases: -eW (Windows), -eG (Gnome)."
+        "Short aliases: -eW (Windows), -eG (Gnome), -eL (Linux w/o Keystore)."
         "Default: windows",
         type=parse_env,
-        choices=["windows", "gnome"],
-        metavar="{windows|gnome}",
+        choices=["windows", "gnome", "linux"],
+        metavar="{windows|gnome|linux}",
         default="windows",
     )
 
@@ -258,8 +262,10 @@ def validate_args(args: argparse.Namespace):
         if not sys.platform.startswith("win") and not sys.platform.startswith("linux"):
             raise OSError("Live mode is currently only available on Windows and Linux Gnome.")
     elif args.mode == "forensic":
-        if args.env != "gnome":
-            raise OSError("Forensic mode is only supported for artifacts originating from a Linux Gnome environment.")
+        if not args.env == "gnome" and not args.env == "linux":
+            raise OSError(
+                "Forensic mode is currently only supported for artifacts originating from a Linux environment."
+            )
 
     # Validate Signal directory
     if not args.dir.is_dir():
@@ -372,6 +378,13 @@ def fetch_aux_key(args: argparse.Namespace, encrypted_sqlcipher_key: bytes):
             else:
                 raise ValueError("An invalid mode for the Gnome environment was chosen!")
             return linux_derive_aux_key(gnome_passphrase)
+        elif args.env == "linux":
+            if linux_should_use_hardcoded_key(encrypted_sqlcipher_key):
+                return linux_derive_aux_key(get_linux_hardcoded_key())
+            else:
+                raise ValueError(
+                    "A OS-level library (e.g Libsecret, Kwallet) was used in the encryption process of this SQLCipher key, you must specify which ('gnome' or 'kwallet') using the --env argument."
+                )
         else:
             encrypted_aux_key = win_fetch_encrypted_aux_key(args.local_state)
             if args.mode == "live":
@@ -411,8 +424,8 @@ def decrypt_sqlcipher_key(args: argparse.Namespace, aux_key: bytes, encrypted_ke
 
     log("Processing the encrypted SQLCipher key...", 2)
 
-    if args.env == "gnome":
-        decrypted_key = gnome_get_sqlcipher_key_from_aux(encrypted_key=encrypted_key, aux_key=aux_key)
+    if args.env == "gnome" or args.env == "linux":
+        decrypted_key = linux_get_sqlcipher_key_from_aux(encrypted_key=encrypted_key, aux_key=aux_key)
     else:
         decrypted_key = win_get_sqlcipher_key_from_aux(encrypted_key=encrypted_key, aux_key=aux_key)
 
