@@ -51,7 +51,7 @@ def process_keyring_file(keyring_path: pathlib.Path):
     salt = data[idx : idx + 8]
     idx += 8 + 4 * 4
 
-    log(f"Skipping non-essential data...", 3)
+    log("Skipping non-essential data...", 3)
     # Get num items
     num_items = struct.unpack(">I", data[idx : idx + 4])[0]
     idx += 4
@@ -77,7 +77,7 @@ def process_keyring_file(keyring_path: pathlib.Path):
                 # Skip guint32 hash
                 idx += 4
 
-    log(f"Extracting encrypted keyring data...", 3)
+    log("Extracting encrypted keyring data...", 3)
 
     # Get number of encrypted bytes
     num_encrypted_bytes = struct.unpack(">I", data[idx : idx + 4])[0]
@@ -111,7 +111,7 @@ def extract_passphrase(keyring: bytes, num_items: int):
 
     idx = 16
     passphrase = None
-    for i in range(num_items):
+    for _ in range(num_items):
         # Get the item display name length
         idx = skip_string(keyring, idx) + 4
 
@@ -130,7 +130,7 @@ def extract_passphrase(keyring: bytes, num_items: int):
         # Get num attributes
         num_attributes = struct.unpack(">I", keyring[idx : idx + 4])[0]
         idx += 4
-        for j in range(num_attributes):
+        for _ in range(num_attributes):
             # Extract attribute name
             name_len = struct.unpack(">I", keyring[idx : idx + 4])[0]
             idx += 4
@@ -153,7 +153,15 @@ def extract_passphrase(keyring: bytes, num_items: int):
             if name == b"application" and val == b"Signal":
                 passphrase = secret
                 break
-        break
+
+        acl_len = struct.unpack(">I", keyring[idx : idx + 4])[0]
+        idx += 4
+        for _ in range(acl_len):
+            idx += 4  # Skip types_allowed
+            idx = skip_string(keyring, idx)  # Skip display_name
+            idx = skip_string(keyring, idx)  # Skip pathname
+            idx = skip_string(keyring, idx)  # Skip reserved_str
+            idx += 4  # Skip reserved_uint
 
     if passphrase is None:
         raise ValueError("Signal's auxiliary key not found in the keyring.")
