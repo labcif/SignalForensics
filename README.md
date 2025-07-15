@@ -71,8 +71,8 @@ SignalDecryptor supports four execution modes:
   This allows full offline decryption of databases and attachments, without needing access to OS-specific secrets or Keyring.
 
 - **SQLCipher Key Provided** (`-m key`)  
-  In this most direct mode, the user provides the **SQLCipher key** (the key that directly decrypts Signal’s database).  
-  This bypasses the need to decrypt anything from the `config.json` or derive keys — the script uses the supplied key immediately to decrypt the database and extract artifacts.
+  In this mode, the user provides the **SQLCipher key** (the key that directly decrypts Signal’s database).  
+  This bypasses the need to decrypt anything from the `config.json` or derive keys, as the script uses the supplied key immediately to decrypt the database and extract artifacts.
 
   > ⚠️ This mode assumes you already possess the exact SQLCipher key used by Signal.
 
