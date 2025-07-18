@@ -130,6 +130,7 @@ def extract_passphrase(keyring: bytes, num_items: int):
         # Get num attributes
         num_attributes = struct.unpack(">I", keyring[idx : idx + 4])[0]
         idx += 4
+        found = False
         for _ in range(num_attributes):
             # Extract attribute name
             name_len = struct.unpack(">I", keyring[idx : idx + 4])[0]
@@ -152,10 +153,13 @@ def extract_passphrase(keyring: bytes, num_items: int):
 
             if name == b"application" and val == b"Signal":
                 passphrase = secret
+                found = True
                 break
-
+        if found == True:
+            break
         acl_len = struct.unpack(">I", keyring[idx : idx + 4])[0]
         idx += 4
+
         for _ in range(acl_len):
             idx += 4  # Skip types_allowed
             idx = skip_string(keyring, idx)  # Skip display_name
