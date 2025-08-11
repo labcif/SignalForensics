@@ -1,5 +1,6 @@
 # from Crypto.Hash import MD4
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.decrepit.ciphers.algorithms import Blowfish
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.hashes import Hash, SHA256, SHA512, SHA1, MD5
@@ -16,6 +17,20 @@ def aes_256_gcm_decrypt(key, nonce, ciphertext, tag):
 # AES-CBC encryption
 def aes_cbc_decrypt(key, nonce, ciphertext):
     decryptor = Cipher(algorithms.AES(key), modes.CBC(nonce), backend=default_backend()).decryptor()
+    return decryptor.update(ciphertext) + decryptor.finalize()
+
+
+# Blowfish CBC decryption
+def blowfish_cbc_decrypt(key, iv, ciphertext):
+    cipher = Cipher(Blowfish(key), modes.CBC(iv), backend=default_backend())
+    decryptor = cipher.decryptor()
+    return decryptor.update(ciphertext) + decryptor.finalize()
+
+
+# Blowfish ECB decryption
+def blowfish_ecb_decrypt(key, ciphertext):
+    cipher = Cipher(Blowfish(key), modes.ECB(), backend=default_backend())
+    decryptor = cipher.decryptor()
     return decryptor.update(ciphertext) + decryptor.finalize()
 
 

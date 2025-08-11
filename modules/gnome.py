@@ -1,5 +1,5 @@
 from modules.crypto import derive_evp_key, aes_cbc_decrypt
-from modules.shared_utils import bytes_to_hex, log
+from modules.shared_utils import bytes_to_hex, log, skip_string
 import pathlib
 import struct
 from modules.linux import (
@@ -10,16 +10,6 @@ from modules.linux import (
 GNOME_KEYRING_PREFIX = b"GnomeKeyring\n\r\0\n"
 SIGNAL_BYTE_SEQ = bytes.fromhex("0000000B6170706C69636174696F6E00000000000000065369676E616C")
 DEC_KEY_PREFIX_GNOME = "v11"
-
-
-# Skip the string length in a keyring file
-def skip_string(data, idx):
-    # Skip the string length
-    idk = idx + 4
-    if data[idk - 4 : idk] != bytes.fromhex("FFFFFFFF"):
-        str_len = struct.unpack(">I", data[idk - 4 : idk])[0]
-        idk += str_len
-    return idk
 
 
 # Process a keyring file, extracting the hash iterations, salt and cipherdata.
@@ -103,10 +93,10 @@ def extract_passphrase(keyring: bytes, num_items: int):
     # HACK: These hashes should match, but they don't even when the keyring is decrypted correctly, not sure why
     # Will use an unorthodox way to check if we decrypted the keyring correctly
 
-    # A keyring with Signal's auxiliary key will include this byte sequence
+    # A keyring with the required passphrase will include this byte sequence
     if SIGNAL_BYTE_SEQ not in keyring:
         raise ValueError(
-            "Decrypted keyring does not contain the expected byte sequence. Either the keyring is not decrypted correctly or the keyring does not contain Signal's auxiliary key."
+            "Decrypted keyring does not contain the expected byte sequence. Either the keyring is not decrypted correctly or the keyring does not contain the required passphrase to derive Signal Desktop's auxiliary key."
         )
 
     idx = 16
@@ -168,7 +158,7 @@ def extract_passphrase(keyring: bytes, num_items: int):
             idx += 4  # Skip reserved_uint
 
     if passphrase is None:
-        raise ValueError("Signal's auxiliary key not found in the keyring.")
+        raise ValueError("The required passphrase was not found in the keyring.")
     return passphrase
 
 
@@ -176,7 +166,7 @@ def gnome_get_aux_key_passphrase(keyring_path: str, password: bytes) -> bytes:
     """
     Manually fetches the passphrase required to derive the auxiliary key for Signal from GNOME Keyring.
     """
-    log("Fetching the passphrase from GNOME Keyring...", 2)
+    log("Fetching the passphrase from GNOME Keyring...", 1)
     hash_iterations, salt, encrypted_keyring_data, num_items = process_keyring_file(pathlib.Path(keyring_path))
 
     log("Deriving keyring EVP key...", 2)
