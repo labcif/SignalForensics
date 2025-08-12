@@ -418,6 +418,7 @@ def fetch_aux_key(args: argparse.Namespace, encrypted_sqlcipher_key: bytes):
         return fetch_key_from_args(args)
     else:
         if args.env in ["gnome", "kwallet"]:
+            the_passphrase = None
             if args.mode == "live":
                 if args.env == "gnome":
                     from modules import gnome_live as gnome_live
