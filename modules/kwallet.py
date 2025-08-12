@@ -50,13 +50,15 @@ def process_kwallet_file(kwallet_path: pathlib.Path):
             )
 
     if cipher == CIPHER_GPG:
-        raise NotImplementedError("GPG support is not implemented yet. Can not process KWallet file with GPG cipher.")
+        raise NotImplementedError(
+            "Forensic mode does not support KDE Wallets protected using GPG. Only Blowfish is supported."
+        )
 
     if hash != 0x02:
         log(f"[!] KWallet file claims to not use the KDF SignalForensic supports. Errors are expected.")
         log(f"[!] KDF signature: 0x{bytes_to_hex(hash)} (expected is 0x02 for PBKDF2-SHA512)")
 
-    log(f"> Cipher: {cipher}, Hash: {hash}", 3)
+    log(f"> Cipher: 0x{bytes_to_hex(cipher)}, Hash: 0x{bytes_to_hex(hash)}", 3)
 
     # Get the folder count
     folder_count = struct.unpack(">I", data[idx : idx + 4])[0]

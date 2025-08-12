@@ -20,6 +20,9 @@ from modules.htmlreport import generate_html_report
 from modules.gnome import (
     gnome_get_aux_key_passphrase,
 )
+from modules.kwallet import (
+    kwallet_get_aux_key_passphrase,
+)
 from modules.linux import (
     linux_derive_aux_key,
     linux_get_sqlcipher_key_from_aux,
@@ -88,11 +91,12 @@ def parse_args():
         aliases = {
             "windows": "windows",
             "gnome": "gnome",
-            "win": "windows",
+            "kwallet": "kwallet",
+            "linux": "linux",
             "w": "windows",
             "g": "gnome",
+            "k": "kwallet",
             "l": "linux",
-            "linux": "linux",
         }
         normalized_value = value.lower()
         if normalized_value not in aliases:
@@ -130,11 +134,11 @@ def parse_args():
         "-e",
         "--env",
         help="Environment from which the Signal data was extracted (currently only 'windows' and 'gnome' are supported)."
-        "Short aliases: -eW (Windows), -eG (Gnome), -eL (Linux w/o Keystore)."
+        "Short aliases: -eW (Windows), -eG (Gnome), -eK (KWallet), -eL (Linux w/o Keystore)."
         "Default: windows",
         type=parse_env,
-        choices=["windows", "gnome", "linux"],
-        metavar="{windows|gnome|linux}",
+        choices=["windows", "gnome", "kwallet", "linux"],
+        metavar="{windows|gnome|kwallet|linux}",
         default="windows",
     )
 
@@ -178,21 +182,21 @@ def parse_args():
     forensic_group.add_argument(
         "-p",
         "--password",
-        help="Gnome Keyring's master password (by default, it is the same as the user account's password)",
+        help="Gnome Keyring/KWallet master password (for Gnome Keyring it is, by default, the same as the user account's password)",
         type=str,
         metavar="<password>",
     )
     forensic_group.add_argument(
         "-pb",
         "--password-bytes",
-        help="Gnome Keyring's master password in HEX format",
+        help="Gnome Keyring/KWallet master password in HEX format",
         type=hex_to_bytes,
         metavar="<bytes>",
     )
     forensic_group.add_argument(
         "-pbf",
         "--password-bytes-file",
-        help="Path to the file containing the Gnome Keyring's master password in HEX format",
+        help="Path to the file containing the Gnome Keyring/KWallet master password in HEX format",
         type=pathlib.Path,
         metavar="<file>",
     )
@@ -200,6 +204,13 @@ def parse_args():
         "-gkf",
         "--gnome-keyring-file",
         help="Path to the user's Gnome Keyring file",
+        type=pathlib.Path,
+        metavar="<file>",
+    )
+    forensic_group.add_argument(
+        "-kwf",
+        "--kwallet-file",
+        help="Path to the user's KWallet file",
         type=pathlib.Path,
         metavar="<file>",
     )
@@ -263,16 +274,16 @@ def validate_args(args: argparse.Namespace):
     # Validate OS-specific modes
     if args.mode == "live":
         if not sys.platform.startswith("win") and not sys.platform.startswith("linux"):
-            raise OSError("Live mode is currently only available on Windows and Linux Gnome.")
+            raise OSError("Live mode is currently only available on Windows and Linux.")
     elif args.mode == "forensic":
-        if not args.env == "gnome" and not args.env == "linux":
+        if not args.env in ["gnome", "kwallet", "linux"]:
             raise OSError(
                 "Forensic mode is currently only supported for artifacts originating from a Linux environment."
             )
     elif args.mode == "passphrase":
-        if not args.env == "gnome":
+        if not args.env in ["gnome", "kwallet"]:
             raise OSError(
-                "Passphrase Provided mode is currently only supported for artifacts originating from a Linux environment using a OS-level keystore library (i.e., Libsecret, Kwallet)."
+                "Passphrase Provided mode is currently only supported for artifacts originating from a Linux environment using a OS-level keystore library (i.e., Libsecret or KWallet)."
             )
 
     # Validate Signal directory
@@ -304,8 +315,16 @@ def validate_args(args: argparse.Namespace):
         except OSError as e:
             raise FileNotFoundError(f"Output directory '{args.output}' does not exist and could not be created.") from e
 
+    def kow():
+        if args.env == "kwallet":
+            return "KWallet"
+        elif args.env == "gnome":
+            return "Gnome Keyring"
+        else:
+            return "Gnome Keyring/KWallet"
+
     # Validate manual mode arguments
-    if args.mode == "forensic":
+    if args.mode == "forensic" and args.env != "linux":
         # if not args.windows_sid:
         #    raise ValueError("Windows User SID is required for manual mode.")
         # if not args.windows_password:
@@ -316,10 +335,18 @@ def validate_args(args: argparse.Namespace):
                     f"Password bytes file '{args.password_bytes_file}' does not exist or is not a file."
                 )
         elif not args.password and not args.password_bytes:
-            raise ValueError("Gnome Keyring's master password is required for forensic mode.")
+            raise ValueError(f"{kow()}'s master password is required for forensic mode.")
 
-        if not args.gnome_keyring_file:
-            raise ValueError("Gnome Keyring file is required for forensic mode.")
+        if args.env == "gnome":
+            if not args.gnome_keyring_file:
+                raise ValueError(
+                    "Gnome Keyring file is required for forensic mode running on artifacts from a Linux Gnome environment."
+                )
+        elif args.env == "kwallet":
+            if not args.kwallet_file:
+                raise ValueError(
+                    "KWallet file is required for forensic mode running on artifacts from a Linux KWallet environment."
+                )
 
     # Validate key provided mode arguments
     if args.mode in ["aux", "key"]:
@@ -372,28 +399,33 @@ def fetch_aux_key(args: argparse.Namespace, encrypted_sqlcipher_key: bytes):
     if args.mode == "aux":
         return fetch_key_from_args(args)
     else:
-        if args.env == "gnome":
+        if args.env in ["gnome", "kwallet"]:
             if args.mode == "live":
-                from modules import gnome_live as gnome_live
+                if args.env == "gnome":
+                    from modules import gnome_live as gnome_live
 
-                gnome_passphrase = gnome_live.gnome_get_aux_key_passphrase_live()
+                    the_passphrase = gnome_live.gnome_get_aux_key_passphrase_live()
+                elif args.env == "kwallet":
+                    from modules import kwallet_live as kwallet_live
+
+                    the_passphrase = kwallet_live.kwallet_get_aux_key_passphrase_live()
             elif args.mode == "forensic":
                 if linux_should_use_hardcoded_key(encrypted_sqlcipher_key):
-                    gnome_passphrase = get_linux_hardcoded_key()
+                    the_passphrase = get_linux_hardcoded_key()
                 else:
                     gnome_password = fetch_password_from_args(args)
-                    gnome_passphrase = gnome_get_aux_key_passphrase(args.gnome_keyring_file, gnome_password)
+                    the_passphrase = gnome_get_aux_key_passphrase(args.gnome_keyring_file, gnome_password)
             elif args.mode == "passphrase":
-                gnome_passphrase = fetch_password_from_args(args)
+                the_passphrase = fetch_password_from_args(args)
             else:
-                raise ValueError("An invalid mode for the Gnome environment was chosen!")
-            return linux_derive_aux_key(gnome_passphrase)
+                raise ValueError("An invalid mode for the chosen environment was selected!")
+            return linux_derive_aux_key(the_passphrase)
         elif args.env == "linux":
             if linux_should_use_hardcoded_key(encrypted_sqlcipher_key):
                 return linux_derive_aux_key(get_linux_hardcoded_key())
             else:
                 raise ValueError(
-                    "A OS-level keystore library (i.e., Libsecret, Kwallet) was used in the encryption process of this SQLCipher key, you must specify which ('gnome' or 'kwallet') using the --env argument."
+                    "A OS-level keystore library (i.e., Libsecret or KWallet) was used in the encryption process of this SQLCipher key, you must specify which ('gnome' or 'kwallet') using the --env argument."
                 )
         else:
             encrypted_aux_key = win_fetch_encrypted_aux_key(args.local_state)
