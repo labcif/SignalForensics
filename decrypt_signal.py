@@ -466,7 +466,7 @@ def decrypt_sqlcipher_key(args: argparse.Namespace, aux_key: bytes, encrypted_ke
 
     log("Processing the encrypted SQLCipher key...", 2)
 
-    if args.env == "gnome" or args.env == "linux":
+    if args.env in ["gnome", "kwallet", "linux"]:
         decrypted_key = linux_get_sqlcipher_key_from_aux(encrypted_key=encrypted_key, aux_key=aux_key)
     else:
         decrypted_key = win_get_sqlcipher_key_from_aux(encrypted_key=encrypted_key, aux_key=aux_key)
