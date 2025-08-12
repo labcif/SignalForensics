@@ -476,6 +476,18 @@ def fetch_encrypted_sqlcipher_key(args: argparse.Namespace):
         if not encrypted_key:
             raise MalformedInputFileError("The Configuration file was malformed: Missing the encrypted SQLCipher key.")
 
+        # Validate the correct environment was selected
+        backend = data.get("safeStorageBackend")
+        if backend:
+            if backend in ["kwallet", "kwallet5", "kwallet6"] and args.env != "kwallet":
+                log(
+                    "[!] The configuration file indicates that KWallet was used, but the environment is set to 'gnome'. Attempting to use KWallet anyway...",
+                )
+            if backend == "gnome-libsecret" and args.env != "gnome":
+                log(
+                    "[!] The configuration file indicates that Gnome Libsecret was used, but the environment is set to 'kwallet'. Attempting to use KWallet anyway..."
+                )
+
         # Import the hex string into bytes
         try:
             key = bytes.fromhex(encrypted_key)
