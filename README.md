@@ -55,12 +55,13 @@ SignalDecryptor supports four execution modes:
 
   - On **Windows**, it uses DPAPI to decrypt the key directly from the `Local State` file.
   - On **GNOME (Linux)**, it accesses the key via the GNOME Keyring, using the currently logged-in user session.
+  - On **KWallet (Linux)**, it accesses the key via the KWallet, using the currently logged-in user session. The user may be prompted for the KWallet's master password.
   - This mode requires execution **within the original user account and environment** (same machine and OS profile as Signal Desktop).
 
 - **Forensic** (`-m forensic`)  
   This mode allows analysts to decrypt Signal artifacts **outside the original system**, provided they have access to:
 
-  - The GNOME Keyring file (usually `login.keyring`)
+  - The GNOME Keyring file (usually `login.keyring`) / The KWallet file
   - The user's master password (or its raw hex form)  
     The script uses these to derive the auxiliary key and subsequently decrypt the SQLCipher key.
     > ⚠️ This mode is currently not available for **Windows**.
@@ -88,18 +89,20 @@ Each mode requires you to specify the **environment** from which the Signal data
 
 - `windows`: Standard Signal Desktop installation on Windows
 - `gnome`: Signal Desktop installation on Linux using GNOME Keyring
+- `kwallet`: Signal Desktop installation on Linux using KWallet
 - `linux`: Signal Desktop installation on Linux without a OS-level keystore library (e.g Libsecret)
 
 ### Compatibility Matrix
 
-| Execution Mode         | Windows | GNOME | Linux |
-| ---------------------- | ------- | ----- | ----- |
-| Live                   | ✅      | ✅    | ➖    |
-| Forensic               | ❌      | ✅    | ✅    |
-| Auxiliary Key Provided | ✅      | ✅    | ✅    |
-| SQLCipher Key Provided | ✅      | ✅    | ✅    |
-| Passphrase Provided    | ❌      | ✅    | ❌    |
+| Execution Mode         | Windows | GNOME | KWallet | Linux |
+| ---------------------- | ------- | ----- | ------- | ----- |
+| Live                   | ✅      | ✅    | ✅\*    | ➖    |
+| Forensic               | ❌      | ✅    | ✅      | ✅    |
+| Auxiliary Key Provided | ✅      | ✅    | ✅      | ✅    |
+| SQLCipher Key Provided | ✅      | ✅    | ✅      | ✅    |
+| Passphrase Provided    | ❌      | ✅    | ✅      | ❌    |
 
+> ⚠️ **Note:** In Linux environments using KWallet, Live mode may cause the KWallet to prompt the user for their master password.
 > ⚠️ **Note:** In Linux environments without a OS-level keystore library, Live mode behaves identically to Forensic mode, as no secure key retrieval via the operating system is required.
 
 ---
@@ -110,7 +113,7 @@ Each mode requires you to specify the **environment** from which the Signal data
 
 ```bash
 SignalForensics [-m live] [-e <environment>] -d <signal_dir> [-o <output_dir>] [OPTIONS]
-SignalForensics -m forensic -e <environment> -d <signal_dir> [-o <output_dir>] [-p <password> | -pb <HEX> | -pbf <file>] -gkf <gnome_keyring_file> [OPTIONS]
+SignalForensics -m forensic -e <environment> -d <signal_dir> [-o <output_dir>] (-p <password> | -pb <HEX> | -pbf <file>) (-gkf <gnome_keyring_file> | -kwf <kwallet_file>) [OPTIONS]
 SignalForensics -m aux [-e <environment>] -d <signal_dir> [-o <output_dir>] [-kf <file> | -k <HEX>] [OPTIONS]
 SignalForensics -m key [-e <environment>] -d <signal_dir> -o <output_dir> [-kf <file> | -k <HEX>] [OPTIONS]
 SignalForensics -m passphrase -e <environment> -d <signal_dir> [-p <passphrase> | -pb <HEX> | -pbf <file>] [-o <output_dir>] [OPTIONS]
@@ -164,7 +167,8 @@ SignalForensics -m passphrase -e <environment> -d <signal_dir> [-p <passphrase> 
 - `-kf`, `--key-file`: Path to file containing key as a hex string (for key provided modes)
 - `-k`, `--key`: Provide key directly as a hex string (for key provided modes)
 - `-gkf`, `--gnome-keyring-file`: Path to Gnome Keyring file (for forensic mode)
-- `-p`, `--password`: Master password for Gnome Keyring (for forensic mode)
+- `-kwf`, `--kwallet-file`: Path to KWallet file (for forensic mode)
+- `-p`, `--password`: Master password for Gnome Keyring / KWallet (for forensic mode)
 - `-pb`, `--password-bytes`: Provide password as a hex string (for forensic mode)
 - `-pbf`, `--password-bytes-file`: Path to file containing password as a hex string (for forensic mode)
 
