@@ -58,7 +58,7 @@ def process_kwallet_file(kwallet_path: pathlib.Path):
         log(f"[!] KWallet file claims to not use the KDF SignalForensic supports. Errors are expected.")
         log(f"[!] KDF signature: 0x{bytes_to_hex(hash)} (expected is 0x02 for PBKDF2-SHA512)")
 
-    log(f"> Cipher: 0x{bytes_to_hex(cipher)}, Hash: 0x{bytes_to_hex(hash)}", 3)
+    log(f"> Cipher: {cipher}, Hash: {hash}", 3)
 
     # Get the folder count
     folder_count = struct.unpack(">I", data[idx : idx + 4])[0]
