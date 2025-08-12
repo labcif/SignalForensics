@@ -125,11 +125,19 @@ SignalForensics -m passphrase -e <environment> -d <signal_dir> [-p <passphrase> 
   ```bash
   SignalForensics -m live -d "C:\Users\TheUser\AppData\Roaming\Signal" -o output_folder
   ```
-- Forensic Mode:
+- Forensic Mode (GNOME):
   ```bash
   SignalDecryptor -m forensic -e gnome -d ~/.config/Signal \
   -p 123456 \
   -gkf ~/.local/share/keyrings/login.keyring \
+  -o output_dir
+  ```
+- Forensic Mode (KWallet):
+  ```bash
+  SignalDecryptor -m forensic -e kwallet -d ~/.config/Signal \
+  -p 123456 \
+  -kwf ~/.local/share/kwalletd/wallet.kwl \
+  -ksf ~/.local/share/kwalletd/wallet.salt \
   -o output_dir
   ```
 - Auxiliary Key Provided Mode:
@@ -168,6 +176,7 @@ SignalForensics -m passphrase -e <environment> -d <signal_dir> [-p <passphrase> 
 - `-k`, `--key`: Provide key directly as a hex string (for key provided modes)
 - `-gkf`, `--gnome-keyring-file`: Path to Gnome Keyring file (for forensic mode)
 - `-kwf`, `--kwallet-file`: Path to KWallet file (for forensic mode)
+- `-ksf`, `--kwallet-salt-file`: Path to KWallet's salt file (for forensic mode)
 - `-p`, `--password`: Master password for Gnome Keyring / KWallet (for forensic mode)
 - `-pb`, `--password-bytes`: Provide password as a hex string (for forensic mode)
 - `-pbf`, `--password-bytes-file`: Path to file containing password as a hex string (for forensic mode)

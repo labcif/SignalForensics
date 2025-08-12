@@ -214,6 +214,13 @@ def parse_args():
         type=pathlib.Path,
         metavar="<file>",
     )
+    forensic_group.add_argument(
+        "-ksf",
+        "--kwallet-salt-file",
+        help="Path to the user's KWallet salt file",
+        type=pathlib.Path,
+        metavar="<file>",
+    )
     # manual_group.add_argument("-wS", "--windows-sid", help="Target windows user's SID", metavar="<SID>")
     # manual_group.add_argument("-wP", "--windows-password", help="Target windows user's password", metavar="<password>")
 
@@ -347,6 +354,17 @@ def validate_args(args: argparse.Namespace):
                 raise ValueError(
                     "KWallet file is required for forensic mode running on artifacts from a Linux KWallet environment."
                 )
+            if not args.kwallet_salt_file:
+                raise ValueError(
+                    "The KWallet's salt file is required for forensic mode running on artifacts from a Linux KWallet environment."
+                )
+            if not args.kwallet_salt_file.is_file():
+                raise FileNotFoundError(
+                    f"KWallet's salt file '{args.kwallet_salt_file}' does not exist or is not a file."
+                )
+            log(f"Reading the KWallet salt from the file...", 2)
+            with args.kwallet_salt_file.open("rb") as f:
+                args.kwallet_salt = f.read()
 
     # Validate key provided mode arguments
     if args.mode in ["aux", "key"]:
@@ -413,8 +431,13 @@ def fetch_aux_key(args: argparse.Namespace, encrypted_sqlcipher_key: bytes):
                 if linux_should_use_hardcoded_key(encrypted_sqlcipher_key):
                     the_passphrase = get_linux_hardcoded_key()
                 else:
-                    gnome_password = fetch_password_from_args(args)
-                    the_passphrase = gnome_get_aux_key_passphrase(args.gnome_keyring_file, gnome_password)
+                    the_password = fetch_password_from_args(args)
+                    if args.mode == "gnome":
+                        the_passphrase = gnome_get_aux_key_passphrase(args.gnome_keyring_file, the_password)
+                    elif args.mode == "kwallet":
+                        the_passphrase = kwallet_get_aux_key_passphrase(
+                            args.kwallet_file, args.kwallet_salt, the_password
+                        )
             elif args.mode == "passphrase":
                 the_passphrase = fetch_password_from_args(args)
             else:
