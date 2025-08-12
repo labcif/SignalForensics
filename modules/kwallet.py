@@ -138,8 +138,11 @@ def extract_passphrase(kwallet: bytes, folder_count: int):
 
             if e_type != 1:
                 # Its not the entry type we are looking for, skip it entirely
-                entry_val_len = struct.unpack(">I", kwallet[idx - 4 : idx])[0]
-                idx += entry_val_len
+                if kwallet[idx - 4 : idx] == b"\xff\xff\xff\xff":  # No value
+                    idx += 4
+                else:
+                    entry_val_len = struct.unpack(">I", kwallet[idx - 4 : idx])[0]
+                    idx += entry_val_len
             else:
                 secret_len = struct.unpack(">I", kwallet[idx : idx + 4])[0]
                 idx += 4 + secret_len
@@ -148,6 +151,9 @@ def extract_passphrase(kwallet: bytes, folder_count: int):
                     # This is the entry we are looking for
                     passphrase = kwallet[idx - secret_len : idx].decode("utf-16-be").encode("utf-8")
                     break
+
+        if passphrase is not None:
+            break
     if passphrase is None:
         raise ValueError("The required passphrase was not found in the KWallet.")
     return passphrase
