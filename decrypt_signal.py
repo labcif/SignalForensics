@@ -481,7 +481,7 @@ def fetch_encrypted_sqlcipher_key(args: argparse.Namespace):
         if backend:
             if backend in ["kwallet", "kwallet5", "kwallet6"] and args.env != "kwallet":
                 log(
-                    "[!] The configuration file indicates that KWallet was used, but the environment is set to 'gnome'. Attempting to use KWallet anyway...",
+                    "[!] The configuration file indicates that KWallet was used, but the environment is set to 'gnome'. Attempting to use Gnome anyway...",
                 )
             if backend == "gnome-libsecret" and args.env != "gnome":
                 log(
