@@ -13,12 +13,13 @@ package-mode = false
 [tool.poetry.dependencies]
 python = "^3.11"
 cryptography = "^44.0.0"
-pywin32 = "^308"
+pywin32 = { version = "^308", markers = "sys_platform == 'win32'" }
 pytz = "^2025.1"
 sqlcipher3-wheels = "^0.5.4"
 pandas = "^2.2.3"
 jinja2 = "^3.1.6"
 secretstorage = "^3.3.3"
+dbus-python = { version = "^1.4.0", markers = "sys_platform == 'linux'" }
 
 
 [build-system]
