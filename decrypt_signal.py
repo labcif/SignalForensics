@@ -418,7 +418,6 @@ def fetch_aux_key(args: argparse.Namespace, encrypted_sqlcipher_key: bytes):
         return fetch_key_from_args(args)
     else:
         if args.env in ["gnome", "kwallet"]:
-            the_passphrase = None
             if args.mode == "live":
                 if args.env == "gnome":
                     from modules import gnome_live as gnome_live
@@ -433,9 +432,9 @@ def fetch_aux_key(args: argparse.Namespace, encrypted_sqlcipher_key: bytes):
                     the_passphrase = get_linux_hardcoded_key()
                 else:
                     the_password = fetch_password_from_args(args)
-                    if args.mode == "gnome":
+                    if args.env == "gnome":
                         the_passphrase = gnome_get_aux_key_passphrase(args.gnome_keyring_file, the_password)
-                    elif args.mode == "kwallet":
+                    elif args.env == "kwallet":
                         the_passphrase = kwallet_get_aux_key_passphrase(
                             args.kwallet_file, args.kwallet_salt, the_password
                         )
