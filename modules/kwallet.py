@@ -138,9 +138,7 @@ def extract_passphrase(kwallet: bytes, folder_count: int):
 
             if e_type != 1:
                 # Its not the entry type we are looking for, skip it entirely
-                if kwallet[idx - 4 : idx] == b"\xff\xff\xff\xff":  # No value
-                    idx += 4
-                else:
+                if kwallet[idx - 4 : idx] != b"\xff\xff\xff\xff":  # No value
                     entry_val_len = struct.unpack(">I", kwallet[idx - 4 : idx])[0]
                     idx += entry_val_len
             else:
