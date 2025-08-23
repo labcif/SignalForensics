@@ -107,7 +107,7 @@ def decrypt_kwallet_data(cipher, encrypted_data: bytes, key: bytes, key_pass: by
     elif cipher == CIPHER_GPG:
         from modules.gpg_crypto import decrypt_kwallet_gpg
 
-        decrypt_kwallet_gpg(encrypted_data, key.decode("utf-8"), key_pass.decode("utf-8"))
+        decrypted_data = decrypt_kwallet_gpg(encrypted_data, key.decode("utf-8"), key_pass.decode("utf-8"))
     else:
         raise NotImplementedError("Unexpected cipher found.")
 
@@ -204,7 +204,7 @@ def kwallet_get_aux_key_passphrase(kwallet_path: str, password: bytes, salt_or_a
 
     log("Extracting the passphrase from the KWallet data...", 2)
     passphrase = extract_passphrase(kwallet, folder_count)
-    log(f"> Passphrase: {bytes_to_hex(passphrase)}", 3)
+    log(f"> Passphrase: {repr(passphrase)}", 3)
 
     return passphrase
 
