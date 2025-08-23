@@ -89,7 +89,8 @@ Each mode requires you to specify the **environment** from which the Signal data
 
 - `windows`: Standard Signal Desktop installation on Windows
 - `gnome`: Signal Desktop installation on Linux using GNOME Keyring
-- `kwallet`: Signal Desktop installation on Linux using KWallet
+- `kwallet_bf`: Signal Desktop installation on Linux using a KWallet protected using Blowfish encryption
+- `kwallet_gpg`: Signal Desktop installation on Linux using a KWallet protected using a GPG key
 - `linux`: Signal Desktop installation on Linux without a OS-level keystore library (e.g Libsecret)
 
 ### Compatibility Matrix
@@ -132,12 +133,20 @@ SignalForensics -m passphrase -e <environment> -d <signal_dir> [-p <passphrase> 
   -gkf ~/.local/share/keyrings/login.keyring \
   -o output_dir
   ```
-- Forensic Mode (KWallet):
+- Forensic Mode (KWallet, Blowfish):
   ```bash
-  SignalDecryptor -m forensic -e kwallet -d ~/.config/Signal \
+  SignalDecryptor -m forensic -e kwallet_bf -d ~/.config/Signal \
   -p 123456 \
   -kwf ~/.local/share/kwalletd/wallet.kwl \
   -ksf ~/.local/share/kwalletd/wallet.salt \
+  -o output_dir
+  ```
+- Forensic Mode (KWallet, GPG):
+  ```bash
+  SignalDecryptor -m forensic -e kwallet_gpg -d ~/.config/Signal \
+  -p 123456 \
+  -kwf ~/.local/share/kwalletd/wallet.kwl \
+  -gak gpg_private_key.asc \
   -o output_dir
   ```
 - Auxiliary Key Provided Mode:
@@ -171,7 +180,7 @@ SignalForensics -m passphrase -e <environment> -d <signal_dir> [-p <passphrase> 
 - `-d`, `--dir`: Path to Signal's data directory
 - `-o`, `--output`: Output directory (optional; disables decryption if not provided)
 - `-m`, `--mode`: Execution mode (`live`, `forensic`, `aux`, or `key`)
-- `-e`, `--env`: Environment where Signal was running (`windows` or `gnome`)
+- `-e`, `--env`: Environment where Signal was running (`windows`, `gnome`, `kwallet_bf`, `kwallet_gpg` or `linux`)
 - `-kf`, `--key-file`: Path to file containing key as a hex string (for key provided modes)
 - `-k`, `--key`: Provide key directly as a hex string (for key provided modes)
 - `-gkf`, `--gnome-keyring-file`: Path to Gnome Keyring file (for forensic mode)
@@ -180,6 +189,7 @@ SignalForensics -m passphrase -e <environment> -d <signal_dir> [-p <passphrase> 
 - `-p`, `--password`: Master password for Gnome Keyring / KWallet (for forensic mode)
 - `-pb`, `--password-bytes`: Provide password as a hex string (for forensic mode)
 - `-pbf`, `--password-bytes-file`: Path to file containing password as a hex string (for forensic mode)
+- `-gak`, `-gpg-key-file`: Path to the file containing the GPG private key in ASCII armored format (for forensic mode)
 
 > ⚠️ The password options (`-p`, `-pb`, `-pbf`) are reused for passphrase provided mode, where they represent the passphrase used to derive the auxiliary key.
 
