@@ -203,7 +203,7 @@ def kwallet_get_aux_key_passphrase(kwallet_path: str, password: bytes, salt_or_a
         kwallet = entry_section
 
     log("Extracting the passphrase from the KWallet data...", 2)
-    passphrase = extract_passphrase(kwallet, cipher, folder_count)
+    passphrase = extract_passphrase(kwallet, folder_count)
     log(f"> Passphrase: {bytes_to_hex(passphrase)}", 3)
 
     return passphrase
