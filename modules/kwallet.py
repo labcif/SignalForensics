@@ -133,12 +133,17 @@ def extract_passphrase(kwallet: bytes, folder_count: int):
         # Get the folder name length
         fn_len = struct.unpack(">I", kwallet[idx : idx + 4])[0]
         idx += 4
+        print(idx)
         folder_name = kwallet[idx : idx + fn_len].decode("utf-16-be")
+        print(idx)
+        print(repr(folder_name))
         idx += fn_len
         if folder_name == "Chromium Keys":
             check_entries = True
+        print(idx)
 
         num_entries = struct.unpack(">I", kwallet[idx : idx + 4])[0]
+        print(repr(num_entries))
         idx += 4
         for _ in range(num_entries):
             # Get the entry name length
