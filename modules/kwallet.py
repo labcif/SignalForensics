@@ -89,9 +89,6 @@ def process_kwallet_file(cipher: int, data: bytes):
 
     log("Extracting encrypted keyring data...", 3)
 
-    if cipher == CIPHER_GPG:
-        idx += 4
-
     encrypted_data = data[idx:]
 
     return folder_count, encrypted_data
@@ -115,7 +112,7 @@ def decrypt_kwallet_data(cipher, encrypted_data: bytes, key: bytes, key_pass: by
 
 
 # Extract the passphrase from the decrypted KWallet data
-def extract_passphrase(kwallet: bytes, folder_count: int):
+def extract_passphrase(kwallet: bytes, folder_count: int, starting_idx: int = 0) -> bytes:
     # HACK: Will use an unorthodox way to check if we decrypted the KWallet correctly
 
     # A KWallet with the required passphrase will include this byte sequence
@@ -123,8 +120,7 @@ def extract_passphrase(kwallet: bytes, folder_count: int):
         raise ValueError(
             "Decrypted KWallet does not contain the expected byte sequence. Either the KWallet is not decrypted correctly or it does not contain the required passphrase."
         )
-
-    idx = 12
+    idx = starting_idx
     passphrase = None
 
     for _ in range(folder_count):
@@ -133,17 +129,12 @@ def extract_passphrase(kwallet: bytes, folder_count: int):
         # Get the folder name length
         fn_len = struct.unpack(">I", kwallet[idx : idx + 4])[0]
         idx += 4
-        print(idx)
         folder_name = kwallet[idx : idx + fn_len].decode("utf-16-be")
-        print(idx)
-        print(repr(folder_name))
         idx += fn_len
         if folder_name == "Chromium Keys":
             check_entries = True
-        print(idx)
 
         num_entries = struct.unpack(">I", kwallet[idx : idx + 4])[0]
-        print(repr(num_entries))
         idx += 4
         for _ in range(num_entries):
             # Get the entry name length
@@ -208,7 +199,7 @@ def kwallet_get_aux_key_passphrase(kwallet_path: str, password: bytes, salt_or_a
         kwallet = entry_section
 
     log("Extracting the passphrase from the KWallet data...", 2)
-    passphrase = extract_passphrase(kwallet, folder_count)
+    passphrase = extract_passphrase(kwallet, folder_count, 4 if cipher == CIPHER_GPG else 12)
     log(f"> Passphrase: {repr(passphrase)}", 3)
 
     return passphrase
