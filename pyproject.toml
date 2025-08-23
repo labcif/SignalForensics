@@ -20,6 +20,7 @@ pandas = "^2.2.3"
 jinja2 = "^3.1.6"
 secretstorage = "^3.3.3"
 dbus-python = { version = "^1.4.0", markers = "sys_platform == 'linux'" }
+python-gnupg = "^0.5.5"
 
 
 [build-system]

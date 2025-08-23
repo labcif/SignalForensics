@@ -1,3 +1,5 @@
+# This module's code is a bit of a mess, sorry about that.
+
 from modules.crypto import blowfish_cbc_decrypt, blowfish_ecb_decrypt, pbkdf2_derive_key
 from modules.shared_utils import bytes_to_hex, log, skip_string
 from cryptography.hazmat.primitives.hashes import SHA512
@@ -21,8 +23,8 @@ CHROMIUM_BYTE_SEQ_3 = bytes.fromhex(
 DEC_KEY_PREFIX_KWALLET = "v11"
 
 
-# Process a KWallet file (KWF) and extract the encrypted data
-def process_kwallet_file(kwallet_path: pathlib.Path):
+# Validate a KWallet file (KWF)
+def validate_kwallet_file(kwallet_path: pathlib.Path):
     if not kwallet_path.is_file():
         raise FileNotFoundError(f"KWallet file '{kwallet_path}' does not exist.")
 
@@ -48,21 +50,28 @@ def process_kwallet_file(kwallet_path: pathlib.Path):
             raise ValueError(
                 f"KWallet does not contain the expected MD5 hashes. Either the KWallet file is corrupted or it does not contain the required passphrase to derive Signal Desktop's auxiliary key."
             )
-
-    if cipher == CIPHER_GPG:
-        raise NotImplementedError(
-            "Forensic mode does not support KDE Wallets protected using GPG. Only Blowfish is supported."
-        )
-
-    if hash != 0x02:
-        log(f"[!] KWallet file claims to not use the KDF SignalForensic supports. Errors are expected.")
-        log(f"[!] KDF signature: 0x{bytes_to_hex(hash)} (expected is 0x02 for PBKDF2-SHA512)")
+        if hash != 0x02:
+            log(f"[!] KWallet file claims to not use the KDF SignalForensic supports. Errors are expected.")
+            log(f"[!] KDF signature: 0x{bytes_to_hex(hash)} (expected is 0x02 for PBKDF2-SHA512)")
 
     log(f"> Cipher: {cipher}, Hash: {hash}", 3)
 
+    return cipher, data[idx:]
+
+
+def process_kwallet_file(cipher: int, data: bytes):
+    idx = 0
+
+    if cipher == CIPHER_GPG:
+        # Skip GPG Key ID
+        gpg_key_id_len = struct.unpack(">I", data[idx : idx + 4])[0]
+        idx += 4 + gpg_key_id_len + 4
+
+    log("Extracting folder count...", 3)
     # Get the folder count
     folder_count = struct.unpack(">I", data[idx : idx + 4])[0]
     idx += 4
+    log(f"> Folder count: {folder_count}", 3)
 
     log("Skipping non-essential data...", 3)
 
@@ -80,12 +89,15 @@ def process_kwallet_file(kwallet_path: pathlib.Path):
 
     log("Extracting encrypted keyring data...", 3)
 
+    if cipher == CIPHER_GPG:
+        idx += 4
+
     encrypted_data = data[idx:]
 
-    return cipher, folder_count, encrypted_data
+    return folder_count, encrypted_data
 
 
-def decrypt_kwallet_data(cipher, encrypted_data: bytes, key: bytes):
+def decrypt_kwallet_data(cipher, encrypted_data: bytes, key: bytes, key_pass: bytes = None) -> bytes:
     if cipher == CIPHER_BF_CBC:
         # Decrypt the data using BLOWFISH CBC
         iv = b"\x00" * 8
@@ -93,7 +105,9 @@ def decrypt_kwallet_data(cipher, encrypted_data: bytes, key: bytes):
     elif cipher == CIPHER_BF_ECB:
         decrypted_data = blowfish_ecb_decrypt(key, encrypted_data)
     elif cipher == CIPHER_GPG:
-        raise NotImplementedError()
+        from modules.gpg_crypto import decrypt_kwallet_gpg
+
+        decrypt_kwallet_gpg(encrypted_data, key.decode("utf-8"), key_pass.decode("utf-8"))
     else:
         raise NotImplementedError("Unexpected cipher found.")
 
@@ -157,30 +171,46 @@ def extract_passphrase(kwallet: bytes, folder_count: int):
     return passphrase
 
 
-def kwallet_get_aux_key_passphrase(kwallet_path: str, salt: bytes, password: bytes) -> bytes:
+def kwallet_get_aux_key_passphrase(kwallet_path: str, password: bytes, salt_or_asc_key: bytes) -> bytes:
     """
     Manually fetches the passphrase required to derive the auxiliary key for Signal from KWallet.
     """
 
     log("Fetching the passphrase from KWallet...", 1)
-    cipher, folder_count, encrypted_kwallet_data = process_kwallet_file(pathlib.Path(kwallet_path))
+    cipher, kwallet_raw_data = validate_kwallet_file(pathlib.Path(kwallet_path))
 
-    log("Deriving PBKDF2 key...", 2)
-    kw_key = pbkdf2_derive_key(algorithm=SHA512(), password=password, salt=salt, iterations=50000, key_length=56)
-    log(f"> KWallet Key: {bytes_to_hex(kw_key)}", 3)
+    if cipher == CIPHER_GPG:
+        kw_key = salt_or_asc_key  # asc_key
+        log(f"> Using provided ASCII-armored GPG key.", 3)
+        log("Decrypting the KWallet data...", 2)
+        kwallet_raw_data = decrypt_kwallet_data(
+            cipher=cipher, encrypted_data=kwallet_raw_data, key=kw_key, key_pass=password
+        )
+    else:
+        log("Deriving PBKDF2 key...", 2)
+        kw_key = pbkdf2_derive_key(
+            algorithm=SHA512(), password=password, salt=salt_or_asc_key, iterations=50000, key_length=56
+        )
+        log(f"> KWallet Key: {bytes_to_hex(kw_key)}", 3)
 
-    log("Decrypting the KWallet data...", 2)
-    kwallet = decrypt_kwallet_data(cipher=cipher, encrypted_data=encrypted_kwallet_data, key=kw_key)
+    # Process the KWallet file to extract the folder count and encrypted data
+    folder_count, entry_section = process_kwallet_file(cipher, kwallet_raw_data)
+
+    if cipher != CIPHER_GPG:
+        log("Decrypting the KWallet data...", 2)
+        kwallet = decrypt_kwallet_data(cipher=cipher, encrypted_data=entry_section, key=kw_key)
+    else:
+        kwallet = entry_section
 
     log("Extracting the passphrase from the KWallet data...", 2)
-    passphrase = extract_passphrase(kwallet, folder_count)
-    log(f"> Passphrase: {repr(passphrase)}", 3)
+    passphrase = extract_passphrase(kwallet, cipher, folder_count)
+    log(f"> Passphrase: {bytes_to_hex(passphrase)}", 3)
 
     return passphrase
 
 
 def kwallet_test_get_sqlcipher_key(kwallet_path: str, salt: bytes, password: bytes, encrypted_key: bytes):
-    passphrase = kwallet_get_aux_key_passphrase(kwallet_path, salt, password)
+    passphrase = kwallet_get_aux_key_passphrase(kwallet_path, password, salt)
     aux_key = linux_derive_aux_key(passphrase)
 
     # Decrypt the SQLCipher key using the auxiliary key

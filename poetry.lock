@@ -448,6 +448,17 @@ files = [
 six = ">=1.5"
 
 [[package]]
+name = "python-gnupg"
+version = "0.5.5"
+description = "A wrapper for the Gnu Privacy Guard (GPG or GnuPG)"
+optional = false
+python-versions = "*"
+files = [
+    {file = "python-gnupg-0.5.5.tar.gz", hash = "sha256:3fdcaf76f60a1b948ff8e37dc398d03cf9ce7427065d583082b92da7a4ff5a63"},
+    {file = "python_gnupg-0.5.5-py2.py3-none-any.whl", hash = "sha256:51fa7b8831ff0914bc73d74c59b99c613de7247b91294323c39733bb85ac3fc1"},
+]
+
+[[package]]
 name = "pytz"
 version = "2025.2"
 description = "World timezone definitions, modern and historical"
@@ -656,4 +667,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "c50389aa3ba810a34b4aa6b14849710571614efc890a4709c1f593048beb2ef4"
+content-hash = "5e4f88414960c11ce1248c87def27d0042dcab4a777bd6a79ebb1a75a9d99382"

@@ -91,11 +91,15 @@ def parse_args():
         aliases = {
             "windows": "windows",
             "gnome": "gnome",
-            "kwallet": "kwallet",
+            "kwallet": "kwallet_bf",
+            "kwallet_bf": "kwallet_bf",
+            "kwallet_gpg": "kwallet_gpg",
             "linux": "linux",
             "w": "windows",
             "g": "gnome",
-            "k": "kwallet",
+            "k": "kwallet_bf",
+            "kg": "kwallet_gpg",
+            "kb": "kwallet_bf",
             "l": "linux",
         }
         normalized_value = value.lower()
@@ -133,12 +137,12 @@ def parse_args():
     parser.add_argument(
         "-e",
         "--env",
-        help="Environment from which the Signal data was extracted (currently only 'windows' and 'gnome' are supported)."
-        "Short aliases: -eW (Windows), -eG (Gnome), -eK (KWallet), -eL (Linux w/o Keystore)."
+        help="Environment from which the Signal data was extracted."
+        "Short aliases: -eW (Windows), -eG (Gnome), -eKB (KWallet, Blowfish), -eKG (KWallet, GPG), -eL (Linux w/o Keystore)."
         "Default: windows",
         type=parse_env,
-        choices=["windows", "gnome", "kwallet", "linux"],
-        metavar="{windows|gnome|kwallet|linux}",
+        choices=["windows", "gnome", "kwallet_bf", "kwallet_gpg", "linux"],
+        metavar="{windows|gnome|kwallet_bf|kwallet_gpg|linux}",
         default="windows",
     )
 
@@ -221,6 +225,13 @@ def parse_args():
         type=pathlib.Path,
         metavar="<file>",
     )
+    forensic_group.add_argument(
+        "-gak",
+        "--gpg-key-file",
+        help="Path to the file containing the GPG private key in ASCII armored format",
+        type=pathlib.Path,
+        metavar="<file>",
+    )
     # manual_group.add_argument("-wS", "--windows-sid", help="Target windows user's SID", metavar="<SID>")
     # manual_group.add_argument("-wP", "--windows-password", help="Target windows user's password", metavar="<password>")
 
@@ -283,12 +294,12 @@ def validate_args(args: argparse.Namespace):
         if not sys.platform.startswith("win") and not sys.platform.startswith("linux"):
             raise OSError("Live mode is currently only available on Windows and Linux.")
     elif args.mode == "forensic":
-        if not args.env in ["gnome", "kwallet", "linux"]:
+        if not args.env in ["gnome", "kwallet_gpg", "kwallet_bf", "linux"]:
             raise OSError(
                 "Forensic mode is currently only supported for artifacts originating from a Linux environment."
             )
     elif args.mode == "passphrase":
-        if not args.env in ["gnome", "kwallet"]:
+        if not args.env in ["gnome", "kwallet_gpg", "kwallet_bf"]:
             raise OSError(
                 "Passphrase Provided mode is currently only supported for artifacts originating from a Linux environment using a OS-level keystore library (i.e., Libsecret or KWallet)."
             )
@@ -323,7 +334,7 @@ def validate_args(args: argparse.Namespace):
             raise FileNotFoundError(f"Output directory '{args.output}' does not exist and could not be created.") from e
 
     def kow():
-        if args.env == "kwallet":
+        if args.env in ["kwallet_gpg", "kwallet_bf"]:
             return "KWallet"
         elif args.env == "gnome":
             return "Gnome Keyring"
@@ -349,22 +360,34 @@ def validate_args(args: argparse.Namespace):
                 raise ValueError(
                     "Gnome Keyring file is required for forensic mode running on artifacts from a Linux Gnome environment."
                 )
-        elif args.env == "kwallet":
+        elif args.env in ["kwallet_gpg", "kwallet_bf"]:
             if not args.kwallet_file:
                 raise ValueError(
                     "KWallet file is required for forensic mode running on artifacts from a Linux KWallet environment."
                 )
-            if not args.kwallet_salt_file:
-                raise ValueError(
-                    "The KWallet's salt file is required for forensic mode running on artifacts from a Linux KWallet environment."
-                )
-            if not args.kwallet_salt_file.is_file():
-                raise FileNotFoundError(
-                    f"KWallet's salt file '{args.kwallet_salt_file}' does not exist or is not a file."
-                )
-            log(f"Reading the KWallet salt from the file...", 2)
-            with args.kwallet_salt_file.open("rb") as f:
-                args.kwallet_salt = f.read()
+            if args.env == "kwallet_bf":
+                if not args.kwallet_salt_file:
+                    raise ValueError(
+                        "The KWallet's salt file is required for forensic mode running on artifacts from a Linux KWallet-Blowfish environment."
+                    )
+                if not args.kwallet_salt_file.is_file():
+                    raise FileNotFoundError(
+                        f"KWallet's salt file '{args.kwallet_salt_file}' does not exist or is not a file."
+                    )
+                log(f"Reading the KWallet salt from the file...", 2)
+                with args.kwallet_salt_file.open("rb") as f:
+                    args.kwallet_salt = f.read()
+            elif args.env == "kwallet_gpg":
+                if not args.gpg_key_file:
+                    raise ValueError(
+                        "The KWallet's GPG private key in ASCII armored format is required for forensic mode running on artifacts from a Linux KWallet-GPG environment."
+                    )
+                if not args.gpg_key_file.is_file():
+                    raise FileNotFoundError(
+                        f"KWallet's GPG private key file '{args.gpg_key_file}' does not exist or is not a file."
+                    )
+                with args.gpg_key_file.open("r") as f:
+                    args.gpg_key = f.read().encode("utf-8")
 
     # Validate key provided mode arguments
     if args.mode in ["aux", "key"]:
@@ -417,13 +440,13 @@ def fetch_aux_key(args: argparse.Namespace, encrypted_sqlcipher_key: bytes):
     if args.mode == "aux":
         return fetch_key_from_args(args)
     else:
-        if args.env in ["gnome", "kwallet"]:
+        if args.env in ["gnome", "kwallet_gpg", "kwallet_bf"]:
             if args.mode == "live":
                 if args.env == "gnome":
                     from modules import gnome_live as gnome_live
 
                     the_passphrase = gnome_live.gnome_get_aux_key_passphrase_live()
-                elif args.env == "kwallet":
+                elif args.env in ["kwallet_gpg", "kwallet_bf"]:
                     from modules import kwallet_live as kwallet_live
 
                     the_passphrase = kwallet_live.kwallet_get_aux_key_passphrase_live()
@@ -434,9 +457,17 @@ def fetch_aux_key(args: argparse.Namespace, encrypted_sqlcipher_key: bytes):
                     the_password = fetch_password_from_args(args)
                     if args.env == "gnome":
                         the_passphrase = gnome_get_aux_key_passphrase(args.gnome_keyring_file, the_password)
-                    elif args.env == "kwallet":
+                    elif args.env == "kwallet_bf":
                         the_passphrase = kwallet_get_aux_key_passphrase(
-                            args.kwallet_file, args.kwallet_salt, the_password
+                            args.kwallet_file,
+                            the_password,
+                            args.kwallet_salt,
+                        )
+                    elif args.env == "kwallet_gpg":
+                        the_passphrase = kwallet_get_aux_key_passphrase(
+                            args.kwallet_file,
+                            the_password,
+                            args.gpg_key,
                         )
             elif args.mode == "passphrase":
                 the_passphrase = fetch_password_from_args(args)
@@ -479,7 +510,7 @@ def fetch_encrypted_sqlcipher_key(args: argparse.Namespace):
         # Validate the correct environment was selected
         backend = data.get("safeStorageBackend")
         if backend:
-            if backend in ["kwallet", "kwallet5", "kwallet6"] and args.env != "kwallet":
+            if backend in ["kwallet", "kwallet5", "kwallet6"] and args.env not in ["kwallet_bf", "kwallet_gpg"]:
                 log(
                     "[!] The configuration file indicates that KWallet was used, but the environment is set to 'gnome'. Attempting to use Gnome anyway...",
                 )
@@ -501,7 +532,7 @@ def decrypt_sqlcipher_key(args: argparse.Namespace, aux_key: bytes, encrypted_ke
 
     log("Processing the encrypted SQLCipher key...", 2)
 
-    if args.env in ["gnome", "kwallet", "linux"]:
+    if args.env in ["gnome", "kwallet_gpg", "kwallet_bf", "linux"]:
         decrypted_key = linux_get_sqlcipher_key_from_aux(encrypted_key=encrypted_key, aux_key=aux_key)
     else:
         decrypted_key = win_get_sqlcipher_key_from_aux(encrypted_key=encrypted_key, aux_key=aux_key)
