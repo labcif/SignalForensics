@@ -62,7 +62,9 @@ SignalDecryptor supports four execution modes:
   This mode allows analysts to decrypt Signal artifacts **outside the original system**, provided they have access to:
 
   - The GNOME Keyring file (usually `login.keyring`) / The KWallet file
-  - The user's master password (or its raw hex form)  
+  - The user's master password (or its raw hex form)
+  - For KWallet-Blowfish, the salt file.
+  - For KWallet-GPG, the GPG key.
     The script uses these to derive the auxiliary key and subsequently decrypt the SQLCipher key.
     > ⚠️ This mode is currently not available for **Windows**.
 
