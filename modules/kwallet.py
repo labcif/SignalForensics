@@ -197,9 +197,8 @@ def kwallet_get_aux_key_passphrase(kwallet_path: str, password: bytes, salt_or_a
         kwallet = decrypt_kwallet_data(cipher=cipher, encrypted_data=entry_section, key=kw_key)
     else:
         kwallet = entry_section
-
     log("Extracting the passphrase from the KWallet data...", 2)
-    passphrase = extract_passphrase(kwallet, folder_count, 4 if cipher == CIPHER_GPG else 12)
+    passphrase = extract_passphrase(kwallet, folder_count, 4 if cipher != CIPHER_BF_CBC else 12)
     log(f"> Passphrase: {repr(passphrase)}", 3)
 
     return passphrase
