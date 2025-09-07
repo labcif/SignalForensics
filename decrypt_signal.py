@@ -7,7 +7,6 @@ import random
 import string
 import sys
 import csv
-from datetime import datetime
 import pytz
 from collections import defaultdict
 
@@ -21,6 +20,7 @@ from modules.shared_utils import (
     MalformedInputFileError,
     mime_to_extension,
     save_file_hash,
+    localize_timestamp,
 )
 from modules.crypto import aes_cbc_decrypt, hash_sha256
 from modules.htmlreport import generate_html_report
@@ -39,7 +39,7 @@ from modules.linux import (
 from modules.windows import win_fetch_encrypted_aux_key, unprotect_manually, win_get_sqlcipher_key_from_aux
 
 ####################### CONSTANTS #######################
-VERSION = "3.1.1"
+VERSION = "3.1.2"
 
 EMPTY_IV = "AAAAAAAAAAAAAAAAAAAAAA=="  # 16 bytes of 0x00
 
@@ -855,7 +855,7 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             return None
         if timestamp == 9007199254740991:
             return None
-        return localize_timestamp(timestamp, args, ms)
+        return localize_timestamp(timestamp, ms)
 
     # Create CSV headers and row arrays
     CONVERSATIONS_HEADERS = [
@@ -1526,7 +1526,7 @@ def generate_hashes_report(hashes, args: argparse.Namespace):
         log("[i] No files were processed, skipping hashes report generation", 2)
         return
     report_path = args.output / "reports" / "files_hashes.csv"
-    HEADERS = ["Category", "SHA-256 Hash", "File Path"]
+    HEADERS = ["Category", "SHA-256 Hash", "Hash Timestamp", "File Path"]
     if write_csv_file(report_path, HEADERS, [list(entry) for entry in hashes]):
         log(f"[i] File hashes report generated", 3)
     else:
@@ -1534,22 +1534,6 @@ def generate_hashes_report(hashes, args: argparse.Namespace):
 
 
 ####################### MISC HELPER FUNCTIONS #######################
-
-
-# Converts a timestamp to a localized string
-def localize_timestamp(timestamp, args: argparse.Namespace, ms=True):
-    """Converts a timestamp to a localized string."""
-    tzStr = args.convert_timestamps
-    if not tzStr:
-        return timestamp
-    if ms:
-        timestamp = int(timestamp / 1000)
-    try:
-        dt = datetime.fromtimestamp(timestamp, pytz.timezone(tzStr))
-        return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
-    except Exception as e:
-        log(f"[!] Failed to localize timestamp {timestamp}: {e}", 3)
-    return timestamp
 
 
 def generate_db_name(length=8, prefix="signal"):
@@ -1584,6 +1568,7 @@ def main():
     # Setup logging
     su.quiet = args.quiet
     su.verbose = args.verbose
+    su.convert_timestamps = args.convert_timestamps
 
     # Initialize SQLCipher key
     decryption_key = None
