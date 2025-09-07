@@ -1,7 +1,7 @@
 # This module's code is a bit of a mess, sorry about that.
 
 from modules.crypto import blowfish_cbc_decrypt, blowfish_ecb_decrypt, pbkdf2_derive_key
-from modules.shared_utils import bytes_to_hex, log, skip_string
+from modules.shared_utils import bytes_to_hex, log, save_file_hash
 from cryptography.hazmat.primitives.hashes import SHA512
 import pathlib
 import struct
@@ -28,6 +28,7 @@ def validate_kwallet_file(kwallet_path: pathlib.Path):
     if not kwallet_path.is_file():
         raise FileNotFoundError(f"KWallet file '{kwallet_path}' does not exist.")
 
+    save_file_hash(kwallet_path, "KWallet File")
     with kwallet_path.open("rb") as f:
         data = f.read()
 

@@ -14,7 +14,14 @@ from collections import defaultdict
 import sqlcipher3
 
 from modules import shared_utils as su
-from modules.shared_utils import bytes_to_hex, log, MalformedKeyError, MalformedInputFileError, mime_to_extension
+from modules.shared_utils import (
+    bytes_to_hex,
+    log,
+    MalformedKeyError,
+    MalformedInputFileError,
+    mime_to_extension,
+    save_file_hash,
+)
 from modules.crypto import aes_cbc_decrypt, hash_sha256
 from modules.htmlreport import generate_html_report
 from modules.gnome import (
@@ -375,6 +382,7 @@ def validate_args(args: argparse.Namespace):
                         f"KWallet's salt file '{args.kwallet_salt_file}' does not exist or is not a file."
                     )
                 log(f"Reading the KWallet salt from the file...", 2)
+                save_file_hash(args.kwallet_salt_file, "KWallet Salt File")
                 with args.kwallet_salt_file.open("rb") as f:
                     args.kwallet_salt = f.read()
             elif args.env == "kwallet_gpg":
@@ -386,6 +394,7 @@ def validate_args(args: argparse.Namespace):
                     raise FileNotFoundError(
                         f"KWallet's GPG private key file '{args.gpg_key_file}' does not exist or is not a file."
                     )
+                save_file_hash(args.gpg_key_file, "GPG Key File")
                 with args.gpg_key_file.open("r") as f:
                     args.gpg_key = f.read().encode("utf-8")
 
@@ -414,6 +423,7 @@ def fetch_hex_or_file_content_from_args(args_file, args_key, content="key"):
     # If a file is provided, read contents from the file
     if args_file:
         log(f"Reading the {content} from the file...", 2)
+        save_file_hash(args_file, f"{content.capitalize()} File")
         with args_file.open("r") as f:
             return bytes.fromhex(f.read().strip())
     elif args_key:
@@ -496,6 +506,7 @@ def fetch_aux_key(args: argparse.Namespace, encrypted_sqlcipher_key: bytes):
 
 def fetch_encrypted_sqlcipher_key(args: argparse.Namespace):
     log("Fetching the encrypted SQLCipher key from the configuration file...", 3)
+    save_file_hash(args.config, "Signal Config File")
     with args.config.open("r") as f:
         try:
             data = json.load(f)
@@ -551,6 +562,8 @@ def open_sqlcipher_db(args: argparse.Namespace, key: bytes):
 
     if not db_path.is_file():
         raise FileNotFoundError(f"Encrypted database '{db_path}' does not exist or is not a file.")
+
+    save_file_hash(db_path, "Signal DB")
 
     # Connect to the database
     conn = sqlcipher3.connect(db_path)
@@ -674,6 +687,7 @@ def process_attachment(args: argparse.Namespace, attachments_dir, attachment, st
             return
 
         # Fetch attachment cipherdata
+        save_file_hash(enc_attachment_path, "Encrypted Attachment")
         with enc_attachment_path.open("rb") as f:
             enc_attachment_data = f.read()
 
@@ -694,6 +708,7 @@ def process_attachment(args: argparse.Namespace, attachments_dir, attachment, st
         attachment_path.parent.mkdir(parents=True, exist_ok=True)
         with attachment_path.open("wb") as f:
             f.write(attachment_data)
+        save_file_hash(attachment_path, "Decrypted Attachment")
 
         statuses["exported"] += 1
     except Exception as e:
@@ -1600,6 +1615,7 @@ def main():
     if not args.skip_reports:
         log("[i] Writing reports...")
         process_database_and_write_reports(db_cursor, args)
+        generate_hashes_report(su.files_hashes, args)
         generate_html_report(args)
 
     # Close the database connection
@@ -1608,6 +1624,19 @@ def main():
     db_conn.close()
 
     return
+
+
+def generate_hashes_report(hashes, args: argparse.Namespace):
+    """Generates a CSV report of file hashes."""
+    if len(hashes) == 0:
+        log("[i] No files were processed, skipping hashes report generation", 2)
+        return
+    report_path = args.output / "files_hashes.csv"
+    HEADERS = ["Category", "File Path", "SHA-256 Hash"]
+    if write_csv_file(report_path, HEADERS, [list(entry.values()) for entry in hashes]):
+        log(f"[i] File hashes report generated", 3)
+    else:
+        log("[!] Failed to write the file hashes CSV report")
 
 
 if __name__ == "__main__":

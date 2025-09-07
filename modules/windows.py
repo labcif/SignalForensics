@@ -1,7 +1,7 @@
 import json
 import base64
 import uuid
-from modules.shared_utils import bytes_to_hex, log, MalformedKeyError, MalformedInputFileError
+from modules.shared_utils import bytes_to_hex, log, MalformedKeyError, MalformedInputFileError, save_file_hash
 import struct
 import pathlib
 import os
@@ -16,6 +16,7 @@ def win_fetch_encrypted_aux_key(local_state) -> bytes:
     """
     Fetches the encrypted auxiliary key from the Local State file.
     """
+    save_file_hash(local_state, "Local State File")
     with local_state.open("r") as f:
         try:
             data = json.load(f)
@@ -92,6 +93,7 @@ def process_dpapi_master_key_file(master_key_path: pathlib.Path):
     if not master_key_path.is_file():
         raise FileNotFoundError(f"Master Key file '{master_key_path}' does not exist.")
     log("Reading from the master key file...", 3)
+    save_file_hash(master_key_path, "DPAPI Master Key File")
     with master_key_path.open("rb") as f:
         data = f.read()
     log("Processing the master key file...", 2)

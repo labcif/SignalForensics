@@ -77,6 +77,13 @@ def hash_sha256(data, rounds=1):
     return hash_algorithm(data, SHA256(), rounds)
 
 
+# Hash file
+def hash_file(file_path, algorithm=SHA256(), rounds=1):
+    with open(file_path, "rb") as f:
+        data = f.read()
+    return hash_algorithm(data, algorithm, rounds)
+
+
 # SHA-512 hash
 def hash_sha512(data, rounds=1):
     return hash_algorithm(data, SHA512(), rounds)

@@ -1,13 +1,23 @@
 import mimetypes
 import struct
+import pathlib
 
 quiet = False
 verbose = 0
+
+files_hashes = set()
 
 
 def log(message: str, level: int = 0):
     if not quiet and (verbose >= level):
         print(message)
+
+
+def save_file_hash(file_path: pathlib.Path, category: str):
+    from modules.crypto import hash_file
+
+    file_hash = hash_file(file_path)
+    files_hashes.add((category, bytes_to_hex(file_hash), str(file_path)))
 
 
 def bytes_to_hex(data: bytes):

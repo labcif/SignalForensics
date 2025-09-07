@@ -1,5 +1,5 @@
 from modules.crypto import derive_evp_key, aes_cbc_decrypt
-from modules.shared_utils import bytes_to_hex, log, skip_string
+from modules.shared_utils import bytes_to_hex, log, skip_string, save_file_hash
 import pathlib
 import struct
 from modules.linux import (
@@ -17,6 +17,7 @@ def process_keyring_file(keyring_path: pathlib.Path):
     if not keyring_path.is_file():
         raise FileNotFoundError(f"Keyring file '{keyring_path}' does not exist.")
 
+    save_file_hash(keyring_path, "GNOME Keyring File")
     with keyring_path.open("rb") as f:
         data = f.read()
 
