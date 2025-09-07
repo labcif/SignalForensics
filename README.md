@@ -13,6 +13,7 @@ This project is based on the work done in the article titled "Decrypting Message
 - Automated decryption of Signal Desktop artifacts
 - Multiple execution modes and support for different environments
 - CSV and HTML report generation
+- Hashing of processed files for integrity verification
 - Quiet mode and customizable verbosity
 - Optional skipping of decryption/report steps
 
@@ -201,7 +202,8 @@ SignalForensics -m passphrase -e <environment> -d <signal_dir> [-p <passphrase> 
 
 SignalForensics generates:
 
-- CSV reports for extracted messages, calls, and attachments
+- CSV reports for extracted messages, calls, attachments, contacts, groups, and more
+- CSV report listing SHA-256 hashes of all processed files
 - HTML report providing an interactive interface for analysis
 
 Example report:
