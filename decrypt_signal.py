@@ -39,7 +39,7 @@ from modules.linux import (
 from modules.windows import win_fetch_encrypted_aux_key, unprotect_manually, win_get_sqlcipher_key_from_aux
 
 ####################### CONSTANTS #######################
-VERSION = "2.1.1"
+VERSION = "3.1.1"
 
 EMPTY_IV = "AAAAAAAAAAAAAAAAAAAAAA=="  # 16 bytes of 0x00
 
@@ -1520,6 +1520,19 @@ def process_database_and_write_reports(cursor, args: argparse.Namespace):
             log("[!] Failed to write the calls history CSV file")
 
 
+def generate_hashes_report(hashes, args: argparse.Namespace):
+    """Generates a CSV report of file hashes."""
+    if len(hashes) == 0:
+        log("[i] No files were processed, skipping hashes report generation", 2)
+        return
+    report_path = args.output / "reports" / "files_hashes.csv"
+    HEADERS = ["Category", "SHA-256 Hash", "File Path"]
+    if write_csv_file(report_path, HEADERS, [list(entry) for entry in hashes]):
+        log(f"[i] File hashes report generated", 3)
+    else:
+        log("[!] Failed to write the file hashes CSV report")
+
+
 ####################### MISC HELPER FUNCTIONS #######################
 
 
@@ -1624,19 +1637,6 @@ def main():
     db_conn.close()
 
     return
-
-
-def generate_hashes_report(hashes, args: argparse.Namespace):
-    """Generates a CSV report of file hashes."""
-    if len(hashes) == 0:
-        log("[i] No files were processed, skipping hashes report generation", 2)
-        return
-    report_path = args.output / "files_hashes.csv"
-    HEADERS = ["Category", "File Path", "SHA-256 Hash"]
-    if write_csv_file(report_path, HEADERS, [list(entry.values()) for entry in hashes]):
-        log(f"[i] File hashes report generated", 3)
-    else:
-        log("[!] Failed to write the file hashes CSV report")
 
 
 if __name__ == "__main__":
