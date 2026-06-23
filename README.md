@@ -4,7 +4,7 @@ SignalForensics is a Python-based forensic tool that automates the decryption an
 
 SignalForensics includes flexible execution modes that adapt to different scenarios and operating systems with varying levels of user input.
 
-This project is based on the work done in the article titled "Decrypting Messages: Extracting Digital Evidence from Signal Desktop for Windows" (dated _TBD_). For a deeper understanding of Signal's data structures and artifacts, as well as the decryption process, we highly recommend checking it out. It provides valuable context and detailed explanations that complement the functionality of this script.
+This project is based on the work done in the article titled "Decrypting Messages: Extracting Digital Evidence from Signal Desktop for Windows" ([Forens. Sci. Int. Digit. Investig. vol. 54, 2025](https://doi.org/10.1016/j.fsidi.2025.301941)). For a deeper understanding of Signal's data structures and artifacts, as well as the decryption process, we highly recommend checking it out. It provides valuable context and detailed explanations that complement the functionality of this script.
 
 ---
 
